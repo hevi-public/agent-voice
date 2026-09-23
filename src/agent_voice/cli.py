@@ -14,7 +14,7 @@ import platform
 import sys
 from pathlib import Path
 
-from . import __version__, skill, speech
+from . import __version__, hooks, skill, speech
 
 
 def _add_say_arguments(parser: argparse.ArgumentParser) -> None:
@@ -110,6 +110,31 @@ def _uninstall_skill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _hook(args: argparse.Namespace) -> int:
+    # Always 0 and silent on stdout: the agent reads a hook's exit code and
+    # output as a verdict on the tool call, and this hook only observes.
+    try:
+        hooks.handle(args.harness, sys.stdin.read())
+    except Exception:
+        pass
+    return 0
+
+
+def _install_hooks(args: argparse.Namespace) -> int:
+    for result in hooks.install(args.harness or list(hooks.HARNESSES)):
+        if result.status == "no-harness":
+            print(f"{'skipped':<10} {result.path} (not found)")
+        else:
+            print(f"{result.status:<10} {result.path}")
+    return 0
+
+
+def _uninstall_hooks(args: argparse.Namespace) -> int:
+    for result in hooks.uninstall(args.harness or list(hooks.HARNESSES)):
+        print(f"{result.status:<10} {result.path}")
+    return 0
+
+
 def _mute(args: argparse.Namespace) -> int:
     speech.set_muted(True)
     print("muted — `agent-voice say` stays silent until: agent-voice unmute")
@@ -141,6 +166,7 @@ def _doctor(args: argparse.Namespace) -> int:
     print(f"    muted: {'yes' if speech.is_muted() else 'no'}")
     installed = [t.skill_file.parent for t in skill.targets(list(skill.HARNESSES)) if t.skill_file.exists()]
     print(f"    skill installed: {', '.join(map(str, installed)) or 'nowhere (run: agent-voice install-skill)'}")
+    print(f"    approval hooks: {', '.join(hooks.installed()) or 'none (run: agent-voice install-hooks)'}")
     return 0 if all(ok for ok, _ in checks) else 1
 
 
@@ -176,6 +202,21 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--force", action="store_true", help="overwrite a SKILL.md that differs")
             command.add_argument("--print", action="store_true", help="print the SKILL.md and exit")
         command.set_defaults(run=run)
+
+    for name, run, verb in (
+        ("install-hooks", _install_hooks, "announce"),
+        ("uninstall-hooks", _uninstall_hooks, "stop announcing"),
+    ):
+        command = commands.add_parser(name, help=f"{verb} tool-approval prompts (Claude Code, Copilot CLI)")
+        command.add_argument(
+            "--for", dest="harness", action="append", choices=hooks.HARNESSES,
+            help="only this harness (repeatable; default: all)",
+        )
+        command.set_defaults(run=run)
+
+    hook = commands.add_parser("hook", help="entry point the installed hooks call; reads the event on stdin")
+    hook.add_argument("--from", dest="harness", required=True, choices=hooks.HARNESSES)
+    hook.set_defaults(run=_hook)
 
     commands.add_parser("mute", help="silence every agent (e.g. for a meeting)").set_defaults(run=_mute)
     commands.add_parser("unmute", help="undo mute").set_defaults(run=_unmute)

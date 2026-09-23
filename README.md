@@ -19,6 +19,7 @@ never breaks because of it.
 uv tool install git+https://github.com/hevi-public/agent-voice
 agent-voice prefetch        # one-time model download (~340 MB) and a test sentence
 agent-voice install-skill   # teach Claude Code and Copilot to use it
+agent-voice install-hooks   # announce tool-approval prompts (optional)
 agent-voice say "Hello from agent-voice."
 ```
 
@@ -72,6 +73,26 @@ model. Speaking reads the local cache and never touches the network. If the
 model isn't downloaded yet, `say` falls back to macOS `say` and tells you to
 run `prefetch`.
 
+## Approval announcements
+
+`agent-voice install-hooks` makes agents say when a tool call is waiting for
+your approval: *"Claude needs your approval to run a shell command in
+billing api."* It uses the agents' own hooks:
+
+| Agent | Hook | Written to |
+|---|---|---|
+| Claude Code | `PermissionRequest` | one entry merged into `~/.claude/settings.json` (a backup is kept next to it) |
+| Copilot CLI | `notification` (`permission_prompt`) | its own file, `~/.copilot/hooks/agent-voice.json` |
+| Copilot in VS Code | none | VS Code has no approval event, so it can't be announced |
+
+The announcement is a summons, not a read-out. It names the kind of tool (from
+the agent's own tool names) and the project folder. It never says the command
+or anything else the model wrote: you approve on screen, where the whole
+command is, and reading part of it aloud could make the rest sound safe. The
+hook returns immediately and speaks in the background, so the dialog never
+waits for the voice. It follows the same folder rule as `install-skill`.
+`agent-voice uninstall-hooks` removes exactly what it added.
+
 ## Commands
 
 ```text
@@ -85,6 +106,7 @@ agent-voice mute | unmute                silence every agent, e.g. during a meet
 agent-voice doctor                       check the install
 agent-voice voices                       list the English voices
 agent-voice uninstall-skill              remove the skill again
+agent-voice install-hooks | uninstall-hooks  announce approval prompts, or stop
 ```
 
 Environment variables: `AGENT_VOICE_VOICE` (default `af_heart`),
