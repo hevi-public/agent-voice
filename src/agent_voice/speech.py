@@ -76,6 +76,28 @@ def default_speed() -> float:
         raise VoiceError(f"AGENT_VOICE_SPEED={raw!r} is not a number") from None
 
 
+# espeak-ng, which misaki uses for words outside its dictionary, keeps the
+# resolved path of its data folder in a 160-byte buffer. A longer path is cut
+# short, espeak-ng cannot open its files, and it exits the whole process — so
+# neither an exception nor the `say` fallback ever happens. Measured with real
+# folders: 159 bytes works, 160 fails. A default install is about 100.
+ESPEAK_PATH_LIMIT = 159
+
+
+def espeak_path_problem() -> str | None:
+    """Why espeak-ng would kill the process at this install location, or None."""
+    import espeakng_loader
+
+    path = os.path.realpath(espeakng_loader.get_data_path())
+    size = len(path.encode())
+    if size <= ESPEAK_PATH_LIMIT:
+        return None
+    return (
+        f"agent-voice is installed too deep for espeak-ng: its data folder's path is {size} bytes "
+        f"and the limit is {ESPEAK_PATH_LIMIT} ({path}); reinstall with a shorter UV_TOOL_DIR"
+    )
+
+
 def lang_code(voice: str) -> str:
     code = voice[:1]
     if code not in ENGLISH_LANG_CODES:
@@ -165,6 +187,9 @@ def synthesize(
     voice = voice or default_voice()
     speed = default_speed() if speed is None else speed
     code = lang_code(voice)
+    problem = espeak_path_problem()
+    if problem:
+        raise VoiceError(problem)
     model = _load_model(verbose)
     with _quiet(verbose):
         segments = list(model.generate(text=text, voice=voice, speed=speed, lang_code=code))

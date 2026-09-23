@@ -154,6 +154,8 @@ def _doctor(args: argparse.Namespace) -> int:
     apple_silicon = sys.platform == "darwin" and platform.machine() == "arm64"
     checks.append((apple_silicon, f"Apple Silicon Mac ({sys.platform}/{platform.machine()})"))
     checks.append((os.access(speech.AFPLAY, os.X_OK), f"{speech.AFPLAY} present"))
+    espeak = speech.espeak_path_problem()
+    checks.append((espeak is None, espeak or "install path short enough for espeak-ng"))
     spacy_model = importlib.util.find_spec("en_core_web_sm") is not None
     checks.append((spacy_model, "spaCy English model (en_core_web_sm) installed"))
     try:

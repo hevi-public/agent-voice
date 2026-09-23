@@ -111,3 +111,22 @@ def test_speaking_never_downloads_the_model(monkeypatch, commands, capsys):
     monkeypatch.setattr(speech, "_model", None)
     assert speech.say("hello") == "say"
     assert "agent-voice prefetch" in capsys.readouterr().err
+
+
+def test_an_install_too_deep_for_espeak_falls_back_instead_of_dying(monkeypatch, commands, capsys):
+    """espeak-ng exits the process on a data path over 159 bytes; catch it before it loads."""
+    import espeakng_loader
+
+    deep = "/Users/someone/" + "d" * 200 + "/espeak-ng-data"
+    monkeypatch.setattr(espeakng_loader, "get_data_path", lambda: deep)
+    monkeypatch.setattr(speech, "_load_model", lambda verbose=False: pytest.fail("reached the model"))
+    assert speech.say("hello") == "say"
+    assert "too deep for espeak-ng" in capsys.readouterr().err
+
+
+def test_a_normal_install_path_is_fine(monkeypatch):
+    import espeakng_loader
+
+    normal = "/Users/someone/.local/share/uv/tools/agent-voice/lib/python3.12/site-packages/espeakng_loader/espeak-ng-data"
+    monkeypatch.setattr(espeakng_loader, "get_data_path", lambda: normal)
+    assert speech.espeak_path_problem() is None

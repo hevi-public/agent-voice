@@ -23,9 +23,10 @@ agent-voice install-hooks   # announce tool-approval prompts (optional)
 agent-voice say "Hello from agent-voice."
 ```
 
-`uv tool install` puts `agent-voice` on your PATH in its own isolated
-environment. The first install downloads about 1 GB of Python packages (MLX,
-PyTorch, spaCy). It needs no admin rights.
+`uv tool install` puts `agent-voice` in `~/.local/bin`, in its own isolated
+environment. If uv warns that this folder isn't on your PATH, run
+`uv tool update-shell` and open a new terminal. The first install downloads
+about 1 GB of Python packages (MLX, PyTorch, spaCy). It needs no admin rights.
 
 Upgrade with `uv tool upgrade agent-voice`. After an upgrade, run
 `agent-voice install-skill --force` if the skill text changed.
@@ -40,7 +41,7 @@ edits (**back it up first**) or a file that belongs to agent-voice alone.
 
 | Path | Written by | What happens |
 |---|---|---|
-| `~/.claude/settings.json` | `install-hooks`, `uninstall-hooks` | **Edited: back it up first.** One `PermissionRequest` hook entry is added (or removed); your other settings and hooks are kept. The file is rewritten with 2-space indentation, so its formatting may change. On the first edit a copy is saved next to it as `settings.json.agent-voice-backup`, but don't rely on that as your only backup. If the file isn't valid JSON, agent-voice stops and changes nothing. |
+| `~/.claude/settings.json` | `install-hooks`, `uninstall-hooks` | **Edited: back it up first.** One `PermissionRequest` hook entry is added (or removed); your other settings and hooks are kept. The file is rewritten with 2-space indentation, so its formatting may change. On the first edit a copy is saved next to it as `settings.json.agent-voice-backup` (left in place by `uninstall-hooks`; delete it when you no longer need it), but don't rely on that as your only backup. If the file isn't valid JSON, agent-voice stops and changes nothing. |
 | `~/.copilot/hooks/agent-voice.json` | `install-hooks`, `uninstall-hooks` | agent-voice's own file, created and deleted whole. |
 | `~/.claude/skills/agent-voice/SKILL.md`, `~/.copilot/skills/agent-voice/SKILL.md` | `install-skill`, `uninstall-skill` | agent-voice's own folders. A `SKILL.md` you've edited is kept unless you pass `--force`. |
 | `<repo>/.claude/skills/agent-voice/`, `<repo>/.github/skills/agent-voice/` | `install-skill --project <repo>` | Same, inside that repo, where they'd be committed with it. |
@@ -181,6 +182,11 @@ git.
 - **You hear the robotic macOS voice:** Kokoro failed, and the reason is
   printed on stderr. Run `agent-voice doctor`, or `agent-voice say -v "test"`
   to see mlx-audio's own output.
+- **`prefetch` or `doctor` says the install is "too deep for espeak-ng":**
+  espeak-ng, which pronounces words outside the dictionary, can't handle a
+  data folder whose path is longer than 159 characters. A default install is
+  about 100, so this only happens with a long custom `UV_TOOL_DIR`. Reinstall
+  somewhere shorter. Until then you'll hear the macOS voice.
 - **Silence, no error:** check `agent-voice doctor` for `muted: yes`, and make
   sure `AGENT_VOICE_MUTE` isn't set in that shell.
 
