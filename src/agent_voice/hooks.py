@@ -5,7 +5,10 @@ only once a dialog has waited about six seconds — approve sooner and nothing i
 said. Its payload does not name the tool, so a `PermissionRequest` hook, which
 fires the moment the dialog appears (and only then: an already-allowed tool
 fires `PreToolUse` alone), silently notes the tool per session for the
-notification to use. All observed with Claude Code 2.1.267.
+notification to use; each note deletes itself within half a minute. All
+observed with Claude Code 2.1.267, which also showed that the transcript
+cannot stand in for the note: six seconds into an open dialog it does not yet
+record the tool call.
 
 Copilot CLI: a `notification` hook, filtered to `notification_type:
 permission_prompt`. Its own `permissionRequest` event is no use here: it fires
@@ -24,6 +27,7 @@ model wrote.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import os
@@ -32,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,39 +99,81 @@ def announcement(event: dict, tool_name: str | None = None) -> str | None:
 # MARK: - the tool a prompt is about
 
 
-PENDING_TTL = 3600
+# How long a note may wait for its notification. The notification comes about
+# six seconds after the dialog opens; a note older than this belongs to an
+# earlier dialog and is never used, and each note deletes itself at this age.
+NOTE_LIFETIME = 30
+# Backstop for notes whose self-deletion never ran (the Mac restarted, say).
+SWEEP_AGE = 3600
+
+_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
 
 
-def _pending_file(event: dict) -> Path | None:
+def _session_notes(event: dict) -> Path | None:
     session = event.get("session_id")
-    if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session):
+    if not isinstance(session, str) or not _ID.fullmatch(session):
         return None
     return state_dir() / "pending" / session
 
 
 def _remember_tool(event: dict) -> None:
     """Notes the tool a Claude Code dialog is asking about, for the notification
-    that follows it if the dialog is still open six seconds later."""
-    path, tool = _pending_file(event), event.get("tool_name")
-    if path is None or not isinstance(tool, str):
+    that follows if the dialog is still open six seconds later.
+
+    One file per dialog, which a detached `sleep; rm` deletes after
+    NOTE_LIFETIME whatever happens — so a dialog answered in time, whose
+    notification never comes, leaves nothing behind.
+    """
+    folder, tool = _session_notes(event), event.get("tool_name")
+    if folder is None or not isinstance(tool, str):
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tool, encoding="utf-8")
-    # A prompt answered in time never gets its notification; sweep what it left.
-    cutoff = time.time() - PENDING_TTL
-    for stale in path.parent.iterdir():
-        if stale.stat().st_mtime < cutoff:
-            stale.unlink(missing_ok=True)
+    request = event.get("tool_use_id")
+    name = request if isinstance(request, str) and _ID.fullmatch(request) else uuid.uuid4().hex
+    note = folder / name
+    for _ in range(2):  # the folder can vanish between mkdir and write: a sibling's cleanup emptied it
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            note.write_text(tool, encoding="utf-8")
+            break
+        except FileNotFoundError:
+            continue
+    else:
+        return
+    subprocess.Popen(
+        ["/bin/sh", "-c", 'sleep "$0"; rm -f "$1"; rmdir "$2" 2>/dev/null; exit 0',
+         str(NOTE_LIFETIME), str(note), str(folder)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    _sweep(folder.parent)
+
+
+def _sweep(pending: Path) -> None:
+    cutoff = time.time() - SWEEP_AGE
+    for folder in pending.iterdir():
+        for note in folder.iterdir() if folder.is_dir() else ():
+            if note.stat().st_mtime < cutoff:
+                note.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            folder.rmdir()  # only if empty
 
 
 def _recall_tool(event: dict) -> str | None:
-    path = _pending_file(event)
-    if path is None or not path.exists():
+    """The tool of this session's newest note, if young enough; clears the session's notes."""
+    folder = _session_notes(event)
+    if folder is None or not folder.is_dir():
         return None
-    try:
-        return path.read_text(encoding="utf-8") if time.time() - path.stat().st_mtime < PENDING_TTL else None
-    finally:
-        path.unlink(missing_ok=True)
+    notes = sorted(folder.iterdir(), key=lambda note: note.stat().st_mtime)
+    tool = None
+    if notes and time.time() - notes[-1].stat().st_mtime <= NOTE_LIFETIME:
+        tool = notes[-1].read_text(encoding="utf-8")
+    for note in notes:
+        note.unlink(missing_ok=True)
+    with contextlib.suppress(OSError):
+        folder.rmdir()
+    return tool
 
 
 def handle(harness: str, raw: str) -> str | None:

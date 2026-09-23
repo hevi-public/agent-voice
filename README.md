@@ -82,7 +82,7 @@ said. It uses the agents' own hooks:
 
 | Agent | Hooks | Written to |
 |---|---|---|
-| Claude Code | `Notification` (`permission_prompt`, about 6 s after the dialog opens) speaks; `PermissionRequest` silently notes which tool it's for | two entries merged into `~/.claude/settings.json` (a backup is kept next to it) |
+| Claude Code | `Notification` (`permission_prompt`, about 6 s after the dialog opens) speaks; `PermissionRequest` notes which tool it's for in `~/.agent-voice/pending/`, a note that deletes itself within 30 s | two entries merged into `~/.claude/settings.json` (a backup is kept next to it) |
 | Copilot CLI | `notification` (`permission_prompt`) | its own file, `~/.copilot/hooks/agent-voice.json` |
 | Copilot in VS Code | none | VS Code has no approval event, so it can't be announced |
 

@@ -1,6 +1,8 @@
 import io
 import json
+import os
 import subprocess
+import time
 
 import pytest
 
@@ -40,7 +42,7 @@ def spawned(monkeypatch):
 
 
 def said(calls):
-    return [argv[-1] for argv, _ in calls]
+    return [argv[-1] for argv, _ in calls if "say" in argv]
 
 
 # MARK: - what is said
@@ -85,10 +87,56 @@ def test_copilot_permission_prompt():
 
 def test_claude_dialog_is_noted_silently_then_announced_when_still_waiting(spawned):
     assert hooks.handle("claude", json.dumps(CLAUDE_REQUEST)) is None
-    assert spawned == []
+    assert said(spawned) == []
     hooks.handle("claude", json.dumps(CLAUDE_WAITING))
     assert said(spawned) == ["Your approval is needed to run a shell command in speech test."]
-    assert spawned[0][1]["start_new_session"] is True
+    assert spawned[-1][1]["start_new_session"] is True
+
+
+def notes_folder(tmp_path):
+    return tmp_path / "state" / "pending" / CLAUDE_REQUEST["session_id"]
+
+
+def test_the_announcement_clears_the_sessions_notes(spawned, tmp_path):
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    assert notes_folder(tmp_path).is_dir()
+    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
+    assert not notes_folder(tmp_path).exists()
+
+
+def test_every_note_schedules_its_own_deletion(spawned, tmp_path):
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    [(argv, kwargs)] = spawned
+    [note] = notes_folder(tmp_path).iterdir()
+    assert argv[:2] == ["/bin/sh", "-c"] and argv[3:] == [str(hooks.NOTE_LIFETIME), str(note), str(note.parent)]
+    assert kwargs["start_new_session"] is True
+
+
+def test_a_dialog_answered_in_time_leaves_nothing_behind(monkeypatch, tmp_path):
+    """The real `sleep; rm`, with the lifetime cut to zero."""
+    monkeypatch.setattr(hooks, "NOTE_LIFETIME", 0)
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    deadline = time.time() + 5
+    while notes_folder(tmp_path).exists() and time.time() < deadline:
+        time.sleep(0.05)
+    assert not notes_folder(tmp_path).exists()
+
+
+def test_a_note_older_than_its_lifetime_is_never_used(spawned, tmp_path):
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    [note] = notes_folder(tmp_path).iterdir()
+    old = time.time() - hooks.NOTE_LIFETIME - 1
+    os.utime(note, (old, old))
+    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
+    assert said(spawned) == ["Your approval is needed in speech test."]
+
+
+def test_the_newest_dialog_wins(spawned):
+    hooks.handle("claude", json.dumps({**CLAUDE_REQUEST, "tool_use_id": "toolu_1"}))
+    time.sleep(0.01)
+    hooks.handle("claude", json.dumps({**CLAUDE_REQUEST, "tool_use_id": "toolu_2", "tool_name": "Edit"}))
+    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
+    assert said(spawned) == ["Your approval is needed to edit a file in speech test."]
 
 
 def test_nothing_the_model_wrote_is_spoken(spawned):
@@ -111,9 +159,11 @@ def test_sessions_do_not_share_their_tool(spawned):
     assert said(spawned) == ["Your approval is needed in speech test."]
 
 
-def test_a_session_id_is_never_used_as_a_path(spawned, tmp_path):
-    hooks.handle("claude", json.dumps({**CLAUDE_REQUEST, "session_id": "../../escape"}))
+@pytest.mark.parametrize("field", ["session_id", "tool_use_id"])
+def test_ids_are_never_used_as_paths(spawned, tmp_path, field):
+    hooks.handle("claude", json.dumps({**CLAUDE_REQUEST, field: "../../escape"}))
     assert not (tmp_path / "escape").exists()
+    assert not (tmp_path / "state" / "escape").exists()
 
 
 def test_copilot_notification_is_announced(spawned):
@@ -123,9 +173,10 @@ def test_copilot_notification_is_announced(spawned):
 
 
 @pytest.mark.parametrize("raw", ["", "not json", "[1, 2]", json.dumps({"hook_event_name": "Stop"})])
-def test_hook_ignores_anything_else(spawned, raw):
+def test_hook_ignores_anything_else(spawned, raw, tmp_path):
     assert hooks.handle("claude", raw) is None
     assert spawned == []
+    assert not (tmp_path / "state").exists()
 
 
 def test_cli_hook_is_silent_and_always_succeeds(monkeypatch, capsys):
