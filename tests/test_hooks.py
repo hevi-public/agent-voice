@@ -8,15 +8,28 @@ from agent_voice import cli, hooks
 
 PROGRAM = "/Users/me/.local/bin/agent-voice"
 
-# Trimmed from a real Claude Code 2.1.267 PermissionRequest payload.
-CLAUDE_BASH = {
-    "session_id": "ce3b6ff5",
+# Trimmed from real Claude Code 2.1.267 payloads: the dialog opens...
+CLAUDE_REQUEST = {
+    "session_id": "ce3b6ff5-4889",
     "cwd": "/Users/me/Projects/speech_test",
     "permission_mode": "default",
     "hook_event_name": "PermissionRequest",
     "tool_name": "Bash",
     "tool_input": {"command": "rm -rf build && git push --force", "description": "i'll push this up now yeah?"},
 }
+# ...and is still open six seconds later.
+CLAUDE_WAITING = {
+    "session_id": "ce3b6ff5-4889",
+    "cwd": "/Users/me/Projects/speech_test",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission",
+    "notification_type": "permission_prompt",
+}
+
+
+@pytest.fixture(autouse=True)
+def isolated_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_VOICE_HOME", str(tmp_path / "state"))
 
 
 @pytest.fixture
@@ -26,19 +39,18 @@ def spawned(monkeypatch):
     return calls
 
 
+def said(calls):
+    return [argv[-1] for argv, _ in calls]
+
+
 # MARK: - what is said
 
 
-def test_claude_prompt_names_the_tool_kind_and_project():
-    assert hooks.announcement("claude", CLAUDE_BASH) == (
-        "Claude needs your approval to run a shell command in speech test."
+def test_the_wording_names_no_agent():
+    assert hooks.announcement(CLAUDE_WAITING, "Bash") == (
+        "Your approval is needed to run a shell command in speech test."
     )
-
-
-def test_nothing_the_model_wrote_is_spoken():
-    text = hooks.announcement("claude", CLAUDE_BASH)
-    for leaked in ("rm", "push", "force", "yeah"):
-        assert leaked not in text
+    assert hooks.announcement(CLAUDE_WAITING) == "Your approval is needed in speech test."
 
 
 @pytest.mark.parametrize(
@@ -51,35 +63,63 @@ def test_nothing_the_model_wrote_is_spoken():
     ],
 )
 def test_tool_kinds(tool, action):
-    assert action in hooks.announcement("claude", {**CLAUDE_BASH, "tool_name": tool})
+    assert action in hooks.announcement(CLAUDE_WAITING, tool)
 
 
 def test_an_unspeakable_folder_name_is_left_out():
-    event = {**CLAUDE_BASH, "cwd": "/tmp/claude-501/7b0a1c31-fa7e-4225-ad1d-46955db3bbb2/scratchpad/ツール"}
-    assert hooks.announcement("claude", event) == "Claude needs your approval to run a shell command."
+    event = {**CLAUDE_WAITING, "cwd": "/tmp/claude-501/7b0a1c31-fa7e-4225-ad1d-46955db3bbb2/scratchpad/ツール"}
+    assert hooks.announcement(event, "Bash") == "Your approval is needed to run a shell command."
 
 
-def test_other_claude_events_are_ignored():
-    assert hooks.announcement("claude", {**CLAUDE_BASH, "hook_event_name": "PreToolUse"}) is None
+def test_other_notifications_are_ignored():
+    assert hooks.announcement({**CLAUDE_WAITING, "notification_type": "idle_prompt"}) is None
 
 
 def test_copilot_permission_prompt():
     event = {"cwd": "/Users/me/work/billing-api", "notification_type": "permission_prompt", "message": "…"}
-    assert hooks.announcement("copilot", event) == "Copilot needs your approval in billing api."
-
-
-def test_other_copilot_notifications_are_ignored():
-    assert hooks.announcement("copilot", {"notification_type": "agent_completed"}) is None
+    assert hooks.announcement(event) == "Your approval is needed in billing api."
 
 
 # MARK: - the hook command
 
 
-def test_hook_speaks_in_a_detached_process(spawned):
-    assert hooks.handle("claude", json.dumps(CLAUDE_BASH))
-    [(argv, kwargs)] = spawned
-    assert argv[-3:] == ["say", "--", "Claude needs your approval to run a shell command in speech test."]
-    assert kwargs["start_new_session"] is True
+def test_claude_dialog_is_noted_silently_then_announced_when_still_waiting(spawned):
+    assert hooks.handle("claude", json.dumps(CLAUDE_REQUEST)) is None
+    assert spawned == []
+    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
+    assert said(spawned) == ["Your approval is needed to run a shell command in speech test."]
+    assert spawned[0][1]["start_new_session"] is True
+
+
+def test_nothing_the_model_wrote_is_spoken(spawned):
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
+    for leaked in ("rm", "push", "force", "yeah", "Claude"):
+        assert leaked not in said(spawned)[0]
+
+
+def test_the_noted_tool_is_used_once(spawned):
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
+    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
+    assert said(spawned)[1] == "Your approval is needed in speech test."
+
+
+def test_sessions_do_not_share_their_tool(spawned):
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("claude", json.dumps({**CLAUDE_WAITING, "session_id": "other"}))
+    assert said(spawned) == ["Your approval is needed in speech test."]
+
+
+def test_a_session_id_is_never_used_as_a_path(spawned, tmp_path):
+    hooks.handle("claude", json.dumps({**CLAUDE_REQUEST, "session_id": "../../escape"}))
+    assert not (tmp_path / "escape").exists()
+
+
+def test_copilot_notification_is_announced(spawned):
+    event = {"sessionId": "s1", "cwd": "/w/billing-api", "notification_type": "permission_prompt"}
+    hooks.handle("copilot", json.dumps(event))
+    assert said(spawned) == ["Your approval is needed in billing api."]
 
 
 @pytest.mark.parametrize("raw", ["", "not json", "[1, 2]", json.dumps({"hook_event_name": "Stop"})])
@@ -93,7 +133,7 @@ def test_cli_hook_is_silent_and_always_succeeds(monkeypatch, capsys):
         raise OSError("no python")
 
     monkeypatch.setattr(hooks, "handle", explode)
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(CLAUDE_BASH)))
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(CLAUDE_WAITING)))
     assert cli.main(["hook", "--from", "claude"]) == 0
     assert capsys.readouterr().out == ""
 
@@ -125,16 +165,16 @@ def test_claude_hook_merges_into_existing_settings(tmp_path):
     data = json.loads(settings.read_text())
     assert data["model"] == "opus" and data["permissions"] == existing["permissions"]
     assert data["hooks"]["Stop"] == existing["hooks"]["Stop"]
+    ours = {"type": "command", "command": f"{PROGRAM} hook --from claude", "async": True, "timeout": 10}
     groups = data["hooks"]["PermissionRequest"]
-    assert groups[0] == existing["hooks"]["PermissionRequest"][0]
-    assert groups[1] == {
-        "hooks": [{"type": "command", "command": f"{PROGRAM} hook --from claude", "async": True, "timeout": 10}]
-    }
+    assert groups == [existing["hooks"]["PermissionRequest"][0], {"hooks": [ours]}]
+    assert data["hooks"]["Notification"] == [{"matcher": "permission_prompt", "hooks": [ours]}]
     assert json.loads((home / ".claude/settings.json.agent-voice-backup").read_text()) == existing
 
     assert hooks.install(["claude"], home=home, program=PROGRAM)[0].status == "unchanged"
     assert hooks.install(["claude"], home=home, program="/elsewhere/agent-voice")[0].status == "updated"
-    assert len(json.loads(settings.read_text())["hooks"]["PermissionRequest"]) == 2
+    after_update = json.loads(settings.read_text())["hooks"]
+    assert len(after_update["PermissionRequest"]) == 2 and len(after_update["Notification"]) == 1
 
     assert hooks.uninstall(["claude"], home=home)[0].status == "removed"
     assert json.loads(settings.read_text()) == existing

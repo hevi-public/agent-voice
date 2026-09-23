@@ -75,23 +75,26 @@ run `prefetch`.
 
 ## Approval announcements
 
-`agent-voice install-hooks` makes agents say when a tool call is waiting for
-your approval: *"Claude needs your approval to run a shell command in
-billing api."* It uses the agents' own hooks:
+`agent-voice install-hooks` makes agents speak up when a tool call has been
+waiting for your approval for a few seconds: *"Your approval is needed to run
+a shell command in billing api."* Approve within those seconds and nothing is
+said. It uses the agents' own hooks:
 
-| Agent | Hook | Written to |
+| Agent | Hooks | Written to |
 |---|---|---|
-| Claude Code | `PermissionRequest` | one entry merged into `~/.claude/settings.json` (a backup is kept next to it) |
+| Claude Code | `Notification` (`permission_prompt`, about 6 s after the dialog opens) speaks; `PermissionRequest` silently notes which tool it's for | two entries merged into `~/.claude/settings.json` (a backup is kept next to it) |
 | Copilot CLI | `notification` (`permission_prompt`) | its own file, `~/.copilot/hooks/agent-voice.json` |
 | Copilot in VS Code | none | VS Code has no approval event, so it can't be announced |
 
 The announcement is a summons, not a read-out. It names the kind of tool (from
-the agent's own tool names) and the project folder. It never says the command
-or anything else the model wrote: you approve on screen, where the whole
-command is, and reading part of it aloud could make the rest sound safe. The
-hook returns immediately and speaks in the background, so the dialog never
-waits for the voice. It follows the same folder rule as `install-skill`.
-`agent-voice uninstall-hooks` removes exactly what it added.
+the agent's own tool names; Copilot's notification doesn't carry one, so there
+it's just *"Your approval is needed in billing api."*) and the project folder.
+It never says the command or anything else the model wrote: you approve on
+screen, where the whole command is, and reading part of it aloud could make
+the rest sound safe. The hook returns immediately and speaks in the
+background, so the agent never waits for the voice. It follows the same
+folder rule as `install-skill`. `agent-voice uninstall-hooks` removes exactly
+what it added.
 
 ## Commands
 

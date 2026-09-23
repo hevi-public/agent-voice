@@ -1,8 +1,11 @@
 """Announces tool-approval prompts through the agents' own hooks.
 
-Claude Code: a `PermissionRequest` hook. It fires when the approval dialog
-appears — and only then: a tool already allowed fires `PreToolUse` alone
-(observed with Claude Code 2.1.267). Its payload names the tool.
+Claude Code: a `Notification` hook matched to `permission_prompt`, which fires
+only once a dialog has waited about six seconds — approve sooner and nothing is
+said. Its payload does not name the tool, so a `PermissionRequest` hook, which
+fires the moment the dialog appears (and only then: an already-allowed tool
+fires `PreToolUse` alone), silently notes the tool per session for the
+notification to use. All observed with Claude Code 2.1.267.
 
 Copilot CLI: a `notification` hook, filtered to `notification_type:
 permission_prompt`. Its own `permissionRequest` event is no use here: it fires
@@ -11,8 +14,8 @@ before the rules engine, so for every tool call, prompted or not.
 VS Code's Copilot has neither — no approval event, and `PreToolUse` cannot tell
 whether VS Code will ask — so it gets no hook.
 
-What is said is a summons, never the command: "Claude needs your approval to
-run a shell command in natter." The answer happens on screen, where the whole
+What is said is a summons, never the command: "Your approval is needed to run
+a shell command in natter." The answer happens on screen, where the whole
 command is; reading part of it aloud would make the unread part sound safe.
 Only names the harness or the user chose are spoken — a tool kind looked up
 from Claude's own tool names, and the project folder's name — nothing the
@@ -21,14 +24,18 @@ model wrote.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from .speech import state_dir
 
 HARNESSES = ("claude", "copilot")
 
@@ -72,21 +79,54 @@ def _project(cwd: object) -> str:
     return name if re.fullmatch(r"[A-Za-z0-9 ]{1,40}", name) else ""
 
 
-def announcement(harness: str, event: dict) -> str | None:
-    """The sentence for a hook event, or None when the event is not an approval prompt."""
+def announcement(event: dict, tool_name: str | None = None) -> str | None:
+    """The sentence for an approval-prompt notification (Claude Code's and
+    Copilot CLI's share the shape), or None for any other event. Worded to fit
+    any agent: nothing says which one is asking."""
+    if event.get("notification_type") != "permission_prompt":
+        return None
     project = _project(event.get("cwd"))
     where = f" in {project}" if project else ""
-    if harness == "claude":
-        if event.get("hook_event_name") != "PermissionRequest":
-            return None
-        tool = event.get("tool_name")
-        action = _tool_action(tool if isinstance(tool, str) else "")
-        return f"Claude needs your approval to {action}{where}."
-    if harness == "copilot":
-        if event.get("notification_type") != "permission_prompt":
-            return None
-        return f"Copilot needs your approval{where}."
-    return None
+    what = f" to {_tool_action(tool_name)}" if tool_name else ""
+    return f"Your approval is needed{what}{where}."
+
+
+# MARK: - the tool a prompt is about
+
+
+PENDING_TTL = 3600
+
+
+def _pending_file(event: dict) -> Path | None:
+    session = event.get("session_id")
+    if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session):
+        return None
+    return state_dir() / "pending" / session
+
+
+def _remember_tool(event: dict) -> None:
+    """Notes the tool a Claude Code dialog is asking about, for the notification
+    that follows it if the dialog is still open six seconds later."""
+    path, tool = _pending_file(event), event.get("tool_name")
+    if path is None or not isinstance(tool, str):
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(tool, encoding="utf-8")
+    # A prompt answered in time never gets its notification; sweep what it left.
+    cutoff = time.time() - PENDING_TTL
+    for stale in path.parent.iterdir():
+        if stale.stat().st_mtime < cutoff:
+            stale.unlink(missing_ok=True)
+
+
+def _recall_tool(event: dict) -> str | None:
+    path = _pending_file(event)
+    if path is None or not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8") if time.time() - path.stat().st_mtime < PENDING_TTL else None
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def handle(harness: str, raw: str) -> str | None:
@@ -101,7 +141,11 @@ def handle(harness: str, raw: str) -> str | None:
         return None
     if not isinstance(event, dict):
         return None
-    text = announcement(harness, event)
+    if harness == "claude" and event.get("hook_event_name") == "PermissionRequest":
+        _remember_tool(event)
+        return None
+    # Copilot CLI's notification has no tool, and nothing records one for it.
+    text = announcement(event, _recall_tool(event) if harness == "claude" else None)
     if text is None:
         return None
     # Detached, so the agent is never held up by the seconds it takes to talk.
@@ -175,14 +219,22 @@ def _read_settings(path: Path) -> dict:
     return data
 
 
+# Claude Code event -> the matcher group fields our handler sits under.
+CLAUDE_EVENTS = {
+    "PermissionRequest": {},
+    "Notification": {"matcher": "permission_prompt"},
+}
+
+
 def _our_claude_handlers(data: dict) -> list[dict]:
     hooks = data.get("hooks")
-    groups = hooks.get("PermissionRequest") if isinstance(hooks, dict) else None
-    if not isinstance(groups, list):
+    if not isinstance(hooks, dict):
         return []
     return [
         handler
-        for group in groups
+        for event in CLAUDE_EVENTS
+        if isinstance(hooks.get(event), list)
+        for group in hooks[event]
         if isinstance(group, dict) and isinstance(group.get("hooks"), list)
         for handler in group["hooks"]
         if isinstance(handler, dict) and _is_ours(handler.get("command"), "claude")
@@ -190,43 +242,47 @@ def _our_claude_handlers(data: dict) -> list[dict]:
 
 
 def _install_claude(settings: Path, command: str) -> str:
-    """Adds one PermissionRequest hook to Claude Code's settings, keeping everything else."""
+    """Adds our two hooks to Claude Code's settings, keeping everything else."""
     data = _read_settings(settings)
-    ours = _our_claude_handlers(data)
-    wanted = {"type": "command", "command": command, "async": True, "timeout": 10}
-    if ours == [wanted]:
+    had_ours = bool(_our_claude_handlers(data))
+    wanted = copy.deepcopy(data)
+    _remove_claude_hooks(wanted)
+    handler = {"type": "command", "command": command, "async": True, "timeout": 10}
+    for event, fields in CLAUDE_EVENTS.items():
+        wanted.setdefault("hooks", {}).setdefault(event, []).append({**fields, "hooks": [dict(handler)]})
+    if wanted == data:
         return "unchanged"
-    status = "updated" if ours else "installed"
-    _remove_claude_hooks(data)
-    data.setdefault("hooks", {}).setdefault("PermissionRequest", []).append({"hooks": [wanted]})
     if settings.exists():
         backup = settings.with_name("settings.json.agent-voice-backup")
         if not backup.exists():
             shutil.copy2(settings, backup)
-    _write_json(settings, data)
-    return status
+    _write_json(settings, wanted)
+    return "updated" if had_ours else "installed"
 
 
 def _remove_claude_hooks(data: dict) -> bool:
-    """Drops our handlers (and any group they leave empty). True if anything went."""
-    hooks = data.get("hooks")
-    if not isinstance(hooks, dict) or not isinstance(hooks.get("PermissionRequest"), list):
-        return False
+    """Drops our handlers (and any group or event they leave empty). True if anything went."""
     if not _our_claude_handlers(data):
         return False
-    kept_groups = []
-    for group in hooks["PermissionRequest"]:
-        handlers = group.get("hooks") if isinstance(group, dict) else None
-        if not isinstance(handlers, list):
-            kept_groups.append(group)  # not ours to judge
+    hooks = data["hooks"]
+    for event in CLAUDE_EVENTS:
+        if not isinstance(hooks.get(event), list):
             continue
-        kept = [h for h in handlers if not (isinstance(h, dict) and _is_ours(h.get("command"), "claude"))]
-        if kept:
-            kept_groups.append({**group, "hooks": kept})
-    if kept_groups:
-        hooks["PermissionRequest"] = kept_groups
-    else:
-        del hooks["PermissionRequest"]
+        kept_groups = []
+        for group in hooks[event]:
+            handlers = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(handlers, list):
+                kept_groups.append(group)  # not ours to judge
+                continue
+            kept = [h for h in handlers if not (isinstance(h, dict) and _is_ours(h.get("command"), "claude"))]
+            if kept:
+                kept_groups.append({**group, "hooks": kept})
+            elif not handlers:
+                kept_groups.append(group)
+        if kept_groups:
+            hooks[event] = kept_groups
+        else:
+            del hooks[event]
     if not hooks:
         del data["hooks"]
     return True
