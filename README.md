@@ -28,8 +28,9 @@ environment. If uv warns that this folder isn't on your PATH, run
 `uv tool update-shell` and open a new terminal. The first install downloads
 about 1 GB of Python packages (MLX, PyTorch, spaCy). It needs no admin rights.
 
-Upgrade with `uv tool upgrade agent-voice`. After an upgrade, run
-`agent-voice install-skill --force` if the skill text changed.
+Upgrade with `uv tool upgrade agent-voice`, then run
+`agent-voice install-skill --force` to pick up any change to the skill's
+instructions. It only overwrites agent-voice's own `SKILL.md` files.
 
 **Before `install-hooks`, back up `~/.claude/settings.json`.** It's the one
 file agent-voice edits rather than creates; see below.
@@ -73,14 +74,38 @@ same file, so that's harmless. To install for one harness only, pass
 `.claude/skills/` and `.github/skills/` instead, so everyone who clones it gets
 the skill.
 
-**Make it announce every time.** An agent loads a skill only when it decides
+**Make it speak every session.** An agent loads a skill only when it decides
 the skill is relevant, and it may not decide that every time. For reliable
-announcements, add a line to your always-on instructions: `~/.claude/CLAUDE.md`
-for Claude Code, `.github/copilot-instructions.md` (or your user instructions)
-for Copilot:
+announcements, add an always-on instruction (`install-skill` prints these
+too):
 
-> When you finish a task, need my input, or hit a failure I should know about,
-> announce it aloud with the agent-voice skill (`agent-voice say "..."`).
+- Claude Code: add this line to `~/.claude/CLAUDE.md`.
+- Copilot: save it as `~/.copilot/instructions/agent-voice.instructions.md`,
+  with `applyTo` frontmatter. Copilot only loads files in that folder whose
+  names end in `.instructions.md`.
+
+```markdown
+---
+applyTo: "**"
+---
+Use the agent-voice skill to speak to me (`agent-voice say "..."`): announce aloud when you finish a task, need my input, or hit a failure I should know about. I can switch you to speaking every reply with /agent-voice conversational, and back with /agent-voice announcer.
+```
+
+(For `CLAUDE.md`, leave out the three frontmatter lines.)
+
+## Modes
+
+The skill has two modes, switched from the chat:
+
+| Command | Mode |
+|---|---|
+| `/agent-voice announcer` | The default. Speaks when a task is done, when the agent needs you, or when something failed. |
+| `/agent-voice conversational` | Speaks every reply, for talking to the agent by voice (your agent's speech-to-text input). Short answers are spoken whole, long ones as their gist, and the agent asks one question at a time. It reads speech-to-text mistakes charitably, but asks aloud when a misheard word would change what it does. |
+
+The agent confirms the switch aloud and keeps the mode for the rest of the
+session. The mode lives in the conversation, not in a file, so a new session
+starts in announcer mode. Both Claude Code and Copilot pass the word after
+`/agent-voice` on to the skill.
 
 **Skip the approval prompt.** Agents ask before running shell commands. To let
 `agent-voice` run without asking:

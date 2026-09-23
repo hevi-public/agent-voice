@@ -93,3 +93,26 @@ def test_cli_install_skill_fails_without_any_harness(tmp_path, capsys):
     assert cli.main(["install-skill", "--project", str(tmp_path)]) == 1
     assert "no agent folder found" in capsys.readouterr().err
     assert list(tmp_path.iterdir()) == []
+
+
+def test_the_skill_takes_a_mode_in_a_form_both_agents_pass_on():
+    text = skill.skill_text()
+    assert 'argument-hint: "[announcer | conversational]"' in text
+    assert "/agent-voice conversational" in text and "/agent-voice announcer" in text
+    # Claude Code appends "ARGUMENTS: <words>" when the skill has no placeholder,
+    # and Copilot has no placeholder syntax at all, so the skill must use none.
+    assert "$ARGUMENTS" not in text and "$0" not in text
+
+
+def test_copilot_instructions_go_in_a_file_it_loads():
+    [(where, text)] = skill.instruction_steps(["copilot"])
+    assert where.endswith("~/.copilot/instructions/agent-voice.instructions.md")
+    assert text.startswith('---\napplyTo: "**"\n---\n')
+    assert text.endswith(skill.INSTRUCTION)
+
+
+def test_instruction_steps_only_for_installed_agents(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HOME", str(home_with(tmp_path, ".claude")))
+    assert cli.main(["install-skill"]) == 0
+    out = capsys.readouterr().out
+    assert "~/.claude/CLAUDE.md" in out and ".copilot/instructions" not in out

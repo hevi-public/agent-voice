@@ -87,11 +87,14 @@ def _install_skill(args: argparse.Namespace) -> int:
     results = skill.install(skill.targets(_harnesses(args), project=args.project), force=args.force)
     for result in results:
         print(_describe(result))
+    installed = [r.target.harness for r in results if r.status != "no-harness"]
     print(
-        "\nSkills load when the model judges them relevant. To have every session announce,\n"
-        "add this line to your always-on instructions (CLAUDE.md, .github/copilot-instructions.md):\n\n"
-        f"  {skill.INSTRUCTION}"
+        "\nAn agent loads a skill only when it judges it relevant. To have every session\n"
+        "use it, add an always-on instruction yourself:"
     )
+    for where, text in skill.instruction_steps(installed, project=args.project):
+        print(f"\n- {where}:\n")
+        print("\n".join(f"    {line}" for line in text.splitlines()))
     return 1 if any(r.status == "differs" for r in results) else 0
 
 

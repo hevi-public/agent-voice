@@ -29,9 +29,31 @@ PROJECT_ROOTS = {
 HARNESSES = tuple(USER_ROOTS)
 
 INSTRUCTION = (
-    "When you finish a task, need my input, or hit a failure I should know about, "
-    'announce it aloud with the agent-voice skill (`agent-voice say "..."`).'
+    'Use the agent-voice skill to speak to me (`agent-voice say "..."`): announce aloud when you '
+    "finish a task, need my input, or hit a failure I should know about. I can switch you to "
+    "speaking every reply with /agent-voice conversational, and back with /agent-voice announcer."
 )
+
+
+def instruction_steps(harnesses: list[str], project: Path | None = None) -> list[tuple[str, str]]:
+    """Where each harness keeps always-on instructions, and what to put there.
+
+    Printed, never written: these are the user's instruction files. Copilot
+    only loads modular files named `*.instructions.md`, with `applyTo`
+    frontmatter saying which files they cover.
+    """
+    copilot_file = f'---\napplyTo: "**"\n---\n{INSTRUCTION}'
+    if project is not None:
+        places = {
+            "claude": (f"add this line to {project / 'CLAUDE.md'}", INSTRUCTION),
+            "copilot": (f"save this as {project / '.github/instructions/agent-voice.instructions.md'}", copilot_file),
+        }
+    else:
+        places = {
+            "claude": ("add this line to ~/.claude/CLAUDE.md", INSTRUCTION),
+            "copilot": ("save this as ~/.copilot/instructions/agent-voice.instructions.md", copilot_file),
+        }
+    return [places[name] for name in harnesses]
 
 
 class NoHarnessError(RuntimeError):
