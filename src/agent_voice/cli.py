@@ -14,7 +14,7 @@ import platform
 import sys
 from pathlib import Path
 
-from . import __version__, hooks, skill, speech
+from . import __version__, hooks, server, skill, speech
 
 
 def _add_say_arguments(parser: argparse.ArgumentParser) -> None:
@@ -48,12 +48,29 @@ def _run_say(args: argparse.Namespace) -> int:
         if args.out:
             speech.save(text, args.out, **options)
             print(f"wrote {args.out}")
-        else:
+        elif speech.is_muted():
+            pass
+        elif not _say_via_server(text, args):
             speech.say(text, **options)
     except Exception as exc:
         print(f"agent-voice say: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _say_via_server(text: str, args: argparse.Namespace) -> bool:
+    """True if the voice server spoke (or refused with an error, raised);
+    False when there is no server, so the caller speaks in-process."""
+    if args.verbose:
+        return False  # mlx-audio's output only shows in-process
+    reply = server.speak(text.strip(), args.voice, args.speed, fallback=not args.no_fallback)
+    if reply is None:
+        return False
+    if not reply.get("ok"):
+        raise RuntimeError(reply.get("error") or "the voice server failed")
+    if reply.get("warning"):
+        print(f"agent-voice: {reply['warning']}", file=sys.stderr)
+    return True
 
 
 # MARK: - agent-voice subcommands
@@ -117,7 +134,7 @@ def _hook(args: argparse.Namespace) -> int:
     # Always 0 and silent on stdout: the agent reads a hook's exit code and
     # output as a verdict on the tool call, and this hook only observes.
     try:
-        hooks.handle(args.harness, sys.stdin.read())
+        hooks.handle(args.harness, sys.stdin.read(), args.event)
     except Exception:
         pass
     return 0
@@ -135,6 +152,16 @@ def _install_hooks(args: argparse.Namespace) -> int:
 def _uninstall_hooks(args: argparse.Namespace) -> int:
     for result in hooks.uninstall(args.harness or list(hooks.HARNESSES)):
         print(f"{result.status:<10} {result.path}")
+    return 0
+
+
+def _serve(args: argparse.Namespace) -> int:
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    return server.serve()
+
+
+def _stop(args: argparse.Namespace) -> int:
+    print("voice server stopped" if server.stop() else "voice server was not running")
     return 0
 
 
@@ -172,6 +199,14 @@ def _doctor(args: argparse.Namespace) -> int:
     installed = [t.skill_file.parent for t in skill.targets(list(skill.HARNESSES)) if t.skill_file.exists()]
     print(f"    skill installed: {', '.join(map(str, installed)) or 'nowhere (run: agent-voice install-skill)'}")
     print(f"    approval hooks: {', '.join(hooks.installed()) or 'none (run: agent-voice install-hooks)'}")
+    status = server.running()
+    if not server.usable():
+        state = "off (AGENT_VOICE_SERVER=0, or the state folder's path is too long for a socket)"
+    elif status:
+        state = f"running (pid {status['pid']}, idle {status['idle'] // 60} min; quits after {server.idle_timeout() / 60:.0f})"
+    else:
+        state = "not running (starts on the next say)"
+    print(f"    voice server: {state}")
     return 0 if all(ok for ok, _ in checks) else 1
 
 
@@ -221,7 +256,11 @@ def main(argv: list[str] | None = None) -> int:
 
     hook = commands.add_parser("hook", help="entry point the installed hooks call; reads the event on stdin")
     hook.add_argument("--from", dest="harness", required=True, choices=hooks.HARNESSES)
+    hook.add_argument("--event", help="the hook event, for agents whose payload doesn't name it")
     hook.set_defaults(run=_hook)
+
+    commands.add_parser("serve", help="run the voice server in the foreground (normally started for you)").set_defaults(run=_serve)
+    commands.add_parser("stop", help="stop the voice server, freeing its memory").set_defaults(run=_stop)
 
     commands.add_parser("mute", help="silence every agent (e.g. for a meeting)").set_defaults(run=_mute)
     commands.add_parser("unmute", help="undo mute").set_defaults(run=_unmute)

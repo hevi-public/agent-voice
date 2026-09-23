@@ -55,3 +55,29 @@ def test_say_turns_hugging_face_offline(spoken, monkeypatch):
     import os
 
     assert os.environ["HF_HUB_OFFLINE"] == "1"
+
+
+def test_say_goes_through_the_voice_server_when_there_is_one(monkeypatch, spoken, capsys):
+    from agent_voice import server
+
+    sent = []
+    monkeypatch.setattr(server, "speak", lambda text, *a, **kw: sent.append(text) or {"ok": True, "engine": "say", "warning": "Kokoro unavailable (x); using macOS say"})
+    assert cli.main(["say", "hello"]) == 0
+    assert sent == ["hello"] and spoken == []
+    assert "Kokoro unavailable" in capsys.readouterr().err
+
+
+def test_say_speaks_in_process_without_a_server(monkeypatch, spoken):
+    from agent_voice import server
+
+    monkeypatch.setattr(server, "speak", lambda *a, **kw: None)
+    assert cli.main(["say", "hello"]) == 0
+    assert spoken[0][0] == "hello"
+
+
+def test_a_server_error_is_reported(monkeypatch, spoken, capsys):
+    from agent_voice import server
+
+    monkeypatch.setattr(server, "speak", lambda *a, **kw: {"ok": False, "error": "no model"})
+    assert cli.main(["say", "--no-fallback", "hello"]) == 1
+    assert "no model" in capsys.readouterr().err

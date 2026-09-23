@@ -42,11 +42,11 @@ edits (**back it up first**) or a file that belongs to agent-voice alone.
 
 | Path | Written by | What happens |
 |---|---|---|
-| `~/.claude/settings.json` | `install-hooks`, `uninstall-hooks` | **Edited: back it up first.** One `PermissionRequest` hook entry is added (or removed); your other settings and hooks are kept. The file is rewritten with 2-space indentation, so its formatting may change. On the first edit a copy is saved next to it as `settings.json.agent-voice-backup` (left in place by `uninstall-hooks`; delete it when you no longer need it), but don't rely on that as your only backup. If the file isn't valid JSON, agent-voice stops and changes nothing. |
+| `~/.claude/settings.json` | `install-hooks`, `uninstall-hooks` | **Edited: back it up first.** Five hook entries are added (or removed): `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit` and `Stop`. Your other settings and hooks are kept. The file is rewritten with 2-space indentation, so its formatting may change. On the first edit a copy is saved next to it as `settings.json.agent-voice-backup` (left in place by `uninstall-hooks`; delete it when you no longer need it), but don't rely on that as your only backup. If the file isn't valid JSON, agent-voice stops and changes nothing. |
 | `~/.copilot/hooks/agent-voice.json` | `install-hooks`, `uninstall-hooks` | agent-voice's own file, created and deleted whole. |
 | `~/.claude/skills/agent-voice/SKILL.md`, `~/.copilot/skills/agent-voice/SKILL.md` | `install-skill`, `uninstall-skill` | agent-voice's own folders. A `SKILL.md` you've edited is kept unless you pass `--force`. |
 | `<repo>/.claude/skills/agent-voice/`, `<repo>/.github/skills/agent-voice/` | `install-skill --project <repo>` | Same, inside that repo, where they'd be committed with it. |
-| `~/.agent-voice/` | speaking, `mute` | Two small files: `playback.lock` (so two agents take turns) and `muted` (only while muted). Nothing else accumulates. Move it with `AGENT_VOICE_HOME`. |
+| `~/.agent-voice/` | speaking, `mute` | `playback.lock` (so two agents take turns), `server.lock` (so only one voice server runs), `voice.sock` (the server's socket, only you can use it; removed when the server quits) and `muted` (only while muted). Nothing else accumulates. Move it with `AGENT_VOICE_HOME`. |
 | `~/.cache/huggingface/hub/` | `prefetch` | The voice model, about 340 MB, in the standard Hugging Face cache. |
 | `~/.local/bin/agent-voice`, `~/.local/share/uv/tools/agent-voice/` | `uv tool install` | The command and its Python environment (about 1 GB). `uv tool uninstall agent-voice` removes both. |
 
@@ -121,6 +121,25 @@ model. Speaking reads the local cache and never touches the network. If the
 model isn't downloaded yet, `say` falls back to macOS `say` and tells you to
 run `prefetch`.
 
+## The voice server
+
+Loading Kokoro and speaking a first sentence takes about 3.5 seconds; a
+sentence from an already-loaded Kokoro starts in about 0.4. So the first
+`agent-voice say` starts a small background server that keeps Kokoro loaded,
+and later calls hand it their text. It speaks one request at a time, so two
+agents still take turns.
+
+- It holds about 800 MB of memory while it runs, and quits by itself after 30
+  minutes without speaking (`AGENT_VOICE_IDLE`, in seconds, changes that).
+- `agent-voice stop` ends it now; `agent-voice doctor` shows whether it runs.
+- `AGENT_VOICE_SERVER=0` turns it off: every `say` then loads Kokoro itself,
+  as before.
+- If it can't start, `say` speaks in-process, and falls back to macOS `say`
+  if Kokoro fails, as always.
+
+The Python library (`from agent_voice import say`) doesn't use the server; it
+keeps Kokoro loaded in your own process instead.
+
 ## Approval announcements
 
 `agent-voice install-hooks` makes agents say when a tool call is waiting for
@@ -129,8 +148,8 @@ api."* It uses the agents' own hooks:
 
 | Agent | Hook | Written to |
 |---|---|---|
-| Claude Code | `PermissionRequest`, which fires as the approval dialog opens | one entry merged into `~/.claude/settings.json` |
-| Copilot CLI | `notification` (`permission_prompt`) | its own file, `~/.copilot/hooks/agent-voice.json` |
+| Claude Code | `PermissionRequest` (the dialog opens) speaks; `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit` and `Stop` stop it | entries merged into `~/.claude/settings.json` |
+| Copilot CLI | `notification` (`permission_prompt`) speaks; `postToolUse`, `postToolUseFailure`, `userPromptSubmitted` and `agentStop` stop it | its own file, `~/.copilot/hooks/agent-voice.json` |
 | Copilot in VS Code | none | VS Code has no approval event, so it can't be announced |
 
 The announcement is a summons, not a read-out. It names the kind of tool (from
@@ -141,7 +160,18 @@ name outside git. It never says the command or anything else the model wrote:
 you approve on screen, where the whole command is, and reading part of it
 aloud could make the rest sound safe. The hook returns immediately and speaks
 in the background, so the agent never waits for the voice, and it keeps no
-state between prompts. It follows the same folder rule as `install-skill`.
+state between prompts.
+
+**Approve quickly and it stops talking.** Neither agent reports that a prompt
+was answered, so agent-voice watches for the next thing that happens instead:
+the approved tool finishing, you typing, or the turn ending. Any of those
+stops that prompt's announcement, whether it's still waiting or already
+playing. In Claude Code the stop is for that exact tool call; Copilot's
+notification doesn't say which tool it's about, so there it's for the whole
+session. It can't help with a long-running command you approved (a test
+suite, say): nothing signals until it finishes, so the announcement plays.
+The stop hooks run after every tool call and take a few hundredths of a
+second. It follows the same folder rule as `install-skill`.
 `agent-voice uninstall-hooks` removes exactly what it added.
 
 ## Commands
@@ -157,13 +187,15 @@ agent-voice mute | unmute                silence every agent, e.g. during a meet
 agent-voice doctor                       check the install
 agent-voice voices                       list the English voices
 agent-voice uninstall-skill              remove the skill again
+agent-voice stop                         stop the voice server now (it restarts on the next say)
 agent-voice install-hooks | uninstall-hooks  announce approval prompts, or stop
 ```
 
 Environment variables: `AGENT_VOICE_VOICE` (default `af_heart`),
 `AGENT_VOICE_SPEED` (default `1.0`), `AGENT_VOICE_MUTE=1` (mutes that shell
-only), and `AGENT_VOICE_HOME` (where the mute flag and the playback lock live,
-default `~/.agent-voice`).
+only), `AGENT_VOICE_SERVER=0` (no voice server), `AGENT_VOICE_IDLE` (seconds
+before the server quits, default 1800), and `AGENT_VOICE_HOME` (where the
+state files live, default `~/.agent-voice`).
 
 When two agents speak at once, the second waits for the first to finish.
 

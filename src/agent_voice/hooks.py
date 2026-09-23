@@ -28,8 +28,11 @@ import re
 import shutil
 import subprocess
 import sys
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import server, speech
 
 HARNESSES = ("claude", "copilot")
 
@@ -118,8 +121,54 @@ def announcement(harness: str, event: dict) -> str | None:
     return f"Your approval is needed{what}{where}."
 
 
-def handle(harness: str, raw: str) -> str | None:
-    """Speaks the announcement for one hook payload, in the background.
+# MARK: - stopping an announcement once the agent has moved on
+#
+# Neither agent has an event for "the prompt was answered". What does fire is
+# the tool finishing, the user typing, or the turn ending — each a sign the
+# prompt is over — so those stop the session's announcement if it is still
+# queued or playing. Claude Code names the tool in both PermissionRequest and
+# PostToolUse, so there the stop is for that exact call (a parallel tool
+# finishing does not silence another's prompt); Copilot's notification names
+# no tool, so there it is per session.
+
+CANCEL_EVENTS = {
+    "claude": {"PostToolUse": "tool", "PostToolUseFailure": "tool", "UserPromptSubmit": "session", "Stop": "session"},
+    "copilot": {"postToolUse": "session", "postToolUseFailure": "session", "userPromptSubmitted": "session", "agentStop": "session"},
+}
+
+_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
+
+
+def _session(event: dict) -> str | None:
+    session = event.get("session_id") or event.get("sessionId")
+    return session if isinstance(session, str) and _ID.fullmatch(session) else None
+
+
+def _tool_key(event: dict) -> str:
+    call = json.dumps([event.get("tool_name"), event.get("tool_input")], sort_keys=True, default=str)
+    return hashlib.sha1(call.encode()).hexdigest()[:12]
+
+
+def _speak_in_background(text: str, tag: str | None) -> None:
+    """Queues `text` on the voice server without waiting for it; without a
+    server, speaks from a detached process. Either way the agent never waits."""
+    if speech.is_muted():
+        return
+    if server.speak(text, tag=tag, wait=False) is not None:
+        return
+    subprocess.Popen(
+        [sys.executable, "-m", "agent_voice", "say", "--", text],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        env={**os.environ, "AGENT_VOICE_SERVER": "0"},  # the server just failed; don't wait on it again
+    )
+
+
+def handle(harness: str, raw: str, event_name: str | None = None) -> str | None:
+    """Acts on one hook payload: announces an approval prompt in the
+    background, or stops the announcement once the agent has moved on.
 
     Never raises, never prints: a hook's stdout is read by the agent as a
     decision, and this one only observes. Returns what it said, for tests.
@@ -130,17 +179,20 @@ def handle(harness: str, raw: str) -> str | None:
         return None
     if not isinstance(event, dict):
         return None
+    name = event_name or event.get("hook_event_name")
+    session = _session(event)
+    scope = CANCEL_EVENTS.get(harness, {}).get(name)
+    if scope is not None:
+        if session is not None:
+            server.cancel(f"{session}:{_tool_key(event)}" if scope == "tool" else session)
+        return None
     text = announcement(harness, event)
     if text is None:
         return None
-    # Detached, so the agent is never held up by the seconds it takes to talk.
-    subprocess.Popen(
-        [sys.executable, "-m", "agent_voice", "say", "--", text],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    tag = None
+    if session is not None:
+        tag = f"{session}:{_tool_key(event)}" if harness == "claude" else session
+    _speak_in_background(text, tag)
     return text
 
 
@@ -165,8 +217,9 @@ def executable() -> str:
     return str(Path(found).absolute()) if found else str(Path(sys.argv[0]).absolute())
 
 
-def hook_command(harness: str, program: str | None = None) -> str:
-    return f"{_quote(program or executable())} hook --from {harness}"
+def hook_command(harness: str, program: str | None = None, event: str | None = None) -> str:
+    command = f"{_quote(program or executable())} hook --from {harness}"
+    return f"{command} --event {event}" if event else command
 
 
 def _quote(path: str) -> str:
@@ -204,12 +257,14 @@ def _read_settings(path: Path) -> dict:
     return data
 
 
-# Claude Code events our handler is installed under.
-CLAUDE_EVENTS = ("PermissionRequest",)
+# Claude Code events our handler is installed under: the prompt, then the
+# events that mean it is over.
+CLAUDE_EVENTS = ("PermissionRequest", *CANCEL_EVENTS["claude"])
 # Every event an agent-voice version ever installed under, so an install or an
 # uninstall also clears what an older version left (0.1.0 briefly used the
 # delayed Notification too).
-CLAUDE_OWNED_EVENTS = ("PermissionRequest", "Notification")
+CLAUDE_OWNED_EVENTS = (*CLAUDE_EVENTS, "Notification")
+COPILOT_EVENTS = ("notification", *CANCEL_EVENTS["copilot"])
 
 
 def _our_claude_handlers(data: dict) -> list[dict]:
@@ -227,15 +282,15 @@ def _our_claude_handlers(data: dict) -> list[dict]:
     ]
 
 
-def _install_claude(settings: Path, command: str) -> str:
-    """Adds our hook to Claude Code's settings, keeping everything else."""
+def _install_claude(settings: Path, program: str | None) -> str:
+    """Adds our hooks to Claude Code's settings, keeping everything else."""
     data = _read_settings(settings)
     had_ours = bool(_our_claude_handlers(data))
     wanted = copy.deepcopy(data)
     _remove_claude_hooks(wanted)
-    handler = {"type": "command", "command": command, "async": True, "timeout": 10}
     for event in CLAUDE_EVENTS:
-        wanted.setdefault("hooks", {}).setdefault(event, []).append({"hooks": [dict(handler)]})
+        handler = {"type": "command", "command": hook_command("claude", program, event), "async": True, "timeout": 10}
+        wanted.setdefault("hooks", {}).setdefault(event, []).append({"hooks": [handler]})
     if wanted == data:
         return "unchanged"
     if settings.exists():
@@ -274,10 +329,13 @@ def _remove_claude_hooks(data: dict) -> bool:
     return True
 
 
-def _copilot_file(command: str) -> dict:
+def _copilot_file(program: str | None) -> dict:
     return {
         "version": 1,
-        "hooks": {"notification": [{"type": "command", "bash": command, "timeoutSec": 10}]},
+        "hooks": {
+            event: [{"type": "command", "bash": hook_command("copilot", program, event), "timeoutSec": 10}]
+            for event in COPILOT_EVENTS
+        },
     }
 
 
@@ -295,11 +353,10 @@ def install(harnesses: list[str], home: Path | None = None, program: str | None 
         if harness not in present:
             results.append(Result(harness, root, "no-harness"))
             continue
-        command = hook_command(harness, program)
         if harness == "claude":
-            status = _install_claude(path, command)
+            status = _install_claude(path, program)
         else:
-            wanted = _copilot_file(command)
+            wanted = _copilot_file(program)
             current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
             status = "unchanged" if current == wanted else ("updated" if current else "installed")
             if status != "unchanged":

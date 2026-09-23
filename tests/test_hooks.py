@@ -195,10 +195,13 @@ def test_claude_hook_merges_into_existing_settings(tmp_path):
     assert result.status == "installed"
     data = json.loads(settings.read_text())
     assert data["model"] == "opus" and data["permissions"] == existing["permissions"]
-    assert data["hooks"]["Stop"] == existing["hooks"]["Stop"]
-    ours = {"type": "command", "command": f"{PROGRAM} hook --from claude", "async": True, "timeout": 10}
-    groups = data["hooks"]["PermissionRequest"]
-    assert groups == [existing["hooks"]["PermissionRequest"][0], {"hooks": [ours]}]
+    def ours(event):
+        return {"hooks": [{"type": "command", "command": f"{PROGRAM} hook --from claude --event {event}", "async": True, "timeout": 10}]}
+
+    assert data["hooks"]["PermissionRequest"] == [existing["hooks"]["PermissionRequest"][0], ours("PermissionRequest")]
+    assert data["hooks"]["Stop"] == [existing["hooks"]["Stop"][0], ours("Stop")]
+    for event in ("PostToolUse", "PostToolUseFailure", "UserPromptSubmit"):
+        assert data["hooks"][event] == [ours(event)]
     assert "Notification" not in data["hooks"]
     assert json.loads((home / ".claude/settings.json.agent-voice-backup").read_text()) == existing
 
@@ -212,17 +215,19 @@ def test_claude_hook_merges_into_existing_settings(tmp_path):
     assert hooks.uninstall(["claude"], home=home)[0].status == "absent"
 
 
-def test_reinstalling_clears_the_delayed_notification_an_older_version_added(tmp_path):
+def test_reinstalling_replaces_what_older_versions_added(tmp_path):
     home = home_with(tmp_path, ".claude")
-    ours = {"type": "command", "command": f"{PROGRAM} hook --from claude", "async": True, "timeout": 10}
+    old = {"type": "command", "command": f"{PROGRAM} hook --from claude", "async": True, "timeout": 10}
     theirs = {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "chime.sh"}]}
     (home / ".claude/settings.json").write_text(json.dumps({"hooks": {
-        "PermissionRequest": [{"hooks": [ours]}],
-        "Notification": [theirs, {"matcher": "permission_prompt", "hooks": [ours]}],
+        "PermissionRequest": [{"hooks": [old]}],
+        "Notification": [theirs, {"matcher": "permission_prompt", "hooks": [old]}],
     }}))
     assert hooks.install(["claude"], home=home, program=PROGRAM)[0].status == "updated"
-    data = json.loads((home / ".claude/settings.json").read_text())
-    assert data["hooks"] == {"PermissionRequest": [{"hooks": [ours]}], "Notification": [theirs]}
+    data = json.loads((home / ".claude/settings.json").read_text())["hooks"]
+    assert data["Notification"] == [theirs]
+    assert set(data) == {"Notification", *hooks.CLAUDE_EVENTS}
+    assert data["PermissionRequest"][0]["hooks"][0]["command"].endswith("--event PermissionRequest")
 
 
 def test_claude_hook_into_a_fresh_settings_file(tmp_path):
@@ -247,11 +252,10 @@ def test_copilot_hook_gets_its_own_file(tmp_path):
     [_, result] = hooks.install(["claude", "copilot"], home=home, program=PROGRAM)
     assert result.status == "installed"
     data = json.loads((home / ".copilot/hooks/agent-voice.json").read_text())
-    assert data == {
-        "version": 1,
-        "hooks": {
-            "notification": [{"type": "command", "bash": f"{PROGRAM} hook --from copilot", "timeoutSec": 10}]
-        },
+    assert data["version"] == 1
+    assert data["hooks"] == {
+        event: [{"type": "command", "bash": f"{PROGRAM} hook --from copilot --event {event}", "timeoutSec": 10}]
+        for event in ("notification", "postToolUse", "postToolUseFailure", "userPromptSubmitted", "agentStop")
     }
     assert not (home / ".claude").exists()
     assert hooks.uninstall(["copilot"], home=home)[0].status == "removed"
@@ -267,3 +271,66 @@ def test_a_program_path_with_spaces_is_quoted_and_still_recognised():
     command = hooks.hook_command("claude", "/Users/me/My Tools/agent-voice")
     assert command == "'/Users/me/My Tools/agent-voice' hook --from claude"
     assert hooks._is_ours(command, "claude")
+
+
+# MARK: - the voice server and cancelling
+
+
+@pytest.fixture
+def voice_server(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hooks.server, "speak", lambda text, **kw: calls.append(("speak", text, kw)) or {"ok": True, "queued": True})
+    monkeypatch.setattr(hooks.server, "cancel", lambda tag: calls.append(("cancel", tag)) or 0)
+    return calls
+
+
+def claude_event(name, **fields):
+    return json.dumps({**CLAUDE_REQUEST, "hook_event_name": name, **fields})
+
+
+def test_claude_announcement_is_queued_tagged_with_its_tool_call(voice_server, spawned):
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    [(op, text, kw)] = voice_server
+    assert op == "speak" and kw["wait"] is False
+    assert kw["tag"].startswith("ce3b6ff5-4889:") and len(kw["tag"]) > len("ce3b6ff5-4889:")
+    assert spawned == []  # the server took it
+
+
+def test_the_approved_tool_finishing_cancels_exactly_its_announcement(voice_server):
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("claude", claude_event("PostToolUse", tool_response={"stdout": ""}))
+    hooks.handle("claude", claude_event("PostToolUse", tool_input={"command": "ls"}))
+    tag = voice_server[0][2]["tag"]
+    assert voice_server[1] == ("cancel", tag)
+    assert voice_server[2][0] == "cancel" and voice_server[2][1] != tag  # another call: another tag
+
+
+@pytest.mark.parametrize("name", ["UserPromptSubmit", "Stop"])
+def test_moving_on_cancels_the_whole_session(voice_server, name):
+    hooks.handle("claude", claude_event(name), name)
+    assert voice_server == [("cancel", "ce3b6ff5-4889")]
+
+
+@pytest.mark.parametrize("name", ["postToolUse", "postToolUseFailure", "userPromptSubmitted", "agentStop"])
+def test_copilot_cancels_by_session_using_the_installed_event_name(voice_server, name):
+    hooks.handle("copilot", json.dumps({"sessionId": "s1", "toolName": "bash"}), name)
+    assert voice_server == [("cancel", "s1")]
+
+
+def test_copilot_announcement_is_tagged_with_its_session(voice_server):
+    hooks.handle("copilot", json.dumps({"sessionId": "s1", "cwd": "/w/app", "notification_type": "permission_prompt"}), "notification")
+    assert voice_server[0][2]["tag"] == "s1"
+
+
+def test_without_a_server_it_speaks_from_a_detached_process(monkeypatch, spawned):
+    monkeypatch.setattr(hooks.server, "speak", lambda text, **kw: None)
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    [(argv, kwargs)] = spawned
+    assert argv[-2:] == ["--", "Your approval is needed to run a shell command in speech test."]
+    assert kwargs["env"]["AGENT_VOICE_SERVER"] == "0"
+
+
+def test_muted_means_nothing_is_queued(voice_server, monkeypatch):
+    monkeypatch.setenv("AGENT_VOICE_MUTE", "1")
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    assert voice_server == []
