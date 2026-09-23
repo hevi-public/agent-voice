@@ -1,0 +1,41 @@
+[project]
+name = "agent-voice"
+version = "0.1.0"
+description = "Spoken status updates for coding agents (Claude Code, GitHub Copilot): local Kokoro text-to-speech on Apple Silicon."
+readme = "README.md"
+# mlx-audio needs >= 3.10; misaki caps at < 3.13.
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "mlx-audio>=0.5,<0.6",
+    "misaki[en]>=0.9.4,<0.10",
+    "soundfile>=0.13",
+    "numpy>=1.26",
+    "huggingface_hub>=1.0",
+    # misaki's English G2P calls spacy.load("en_core_web_sm"), and that model is
+    # not on PyPI. Left out, misaki tries `spacy download` at runtime, which
+    # shells out to a pip that uv-built environments do not have: it reports
+    # success, installs nothing, and every sentence then fails with E050.
+    # A direct URL is the only way to declare it — and the reason this package
+    # installs from git rather than from PyPI, which rejects direct references.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
+
+[project.scripts]
+speak = "agent_voice.cli:speak_main"
+agent-voice = "agent_voice.cli:main"
+
+[project.urls]
+Repository = "https://github.com/hevi-public/agent-voice"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
