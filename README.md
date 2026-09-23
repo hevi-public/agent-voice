@@ -1,8 +1,8 @@
 # agent-voice
 
 Spoken status updates for coding agents. Claude Code or GitHub Copilot runs
-`speak "The tests pass and the branch is pushed."` when it finishes, gets
-stuck or needs you, so you hear it while you're working in another window.
+`agent-voice say "The tests pass and the branch is pushed."` when it
+finishes, gets stuck or needs you, so you hear it while you're working in another window.
 
 The voice is [Kokoro](https://huggingface.co/mlx-community/Kokoro-82M-bf16), a
 small neural TTS model that runs locally on Apple Silicon through
@@ -19,12 +19,12 @@ never breaks because of it.
 uv tool install git+https://github.com/hevi-public/agent-voice
 agent-voice prefetch        # one-time model download (~340 MB) and a test sentence
 agent-voice install-skill   # teach Claude Code and Copilot to use it
-speak "Hello from agent-voice."
+agent-voice say "Hello from agent-voice."
 ```
 
-`uv tool install` puts `speak` and `agent-voice` on your PATH, each in its own
-isolated environment. The first install downloads about 1 GB of Python
-packages (MLX, PyTorch, spaCy). It needs no admin rights.
+`uv tool install` puts `agent-voice` on your PATH in its own isolated
+environment. The first install downloads about 1 GB of Python packages (MLX,
+PyTorch, spaCy). It needs no admin rights.
 
 Upgrade with `uv tool upgrade agent-voice`. After an upgrade, run
 `agent-voice install-skill --force` if the skill text changed.
@@ -51,30 +51,30 @@ for Claude Code, `.github/copilot-instructions.md` (or your user instructions)
 for Copilot:
 
 > When you finish a task, need my input, or hit a failure I should know about,
-> announce it aloud with the agent-voice skill (`speak "..."`).
+> announce it aloud with the agent-voice skill (`agent-voice say "..."`).
 
 **Skip the approval prompt.** Agents ask before running shell commands. To let
-`speak` run without asking:
+`agent-voice` run without asking:
 
 - Claude Code, in `~/.claude/settings.json`:
-  `"permissions": { "allow": ["Bash(speak:*)"] }`
+  `"permissions": { "allow": ["Bash(agent-voice:*)"] }`
 - VS Code Copilot, in settings.json:
-  `"chat.tools.terminal.autoApprove": { "speak": true }`
-- Copilot CLI: `copilot --allow-tool='shell(speak)'`
+  `"chat.tools.terminal.autoApprove": { "agent-voice": true }`
+- Copilot CLI: `copilot --allow-tool='shell(agent-voice)'`
 
 ## Commands
 
 ```text
-speak "text"                   say it; blocks until finished
-speak < file.txt               text from stdin (safe with quotes, $ and !)
-speak --voice bm_george "..."  another voice (agent-voice voices lists them)
-speak --speed 1.2 "..."        faster
-speak --out hi.wav "..."       write a WAV file instead of playing it
+agent-voice say "text"                   say it; blocks until finished
+agent-voice say < file.txt               text from stdin (safe with quotes, $ and !)
+agent-voice say --voice bm_george "..."  another voice (agent-voice voices lists them)
+agent-voice say --speed 1.2 "..."        faster
+agent-voice say --out hi.wav "..."       write a WAV file instead of playing it
 
-agent-voice mute | unmute      silence every agent, e.g. during a meeting
-agent-voice doctor             check the install
-agent-voice voices             list the English voices
-agent-voice uninstall-skill    remove the skill again
+agent-voice mute | unmute                silence every agent, e.g. during a meeting
+agent-voice doctor                       check the install
+agent-voice voices                       list the English voices
+agent-voice uninstall-skill              remove the skill again
 ```
 
 Environment variables: `AGENT_VOICE_VOICE` (default `af_heart`),
@@ -122,8 +122,8 @@ git.
   your company's mirror. The model is cached in `~/.cache/huggingface/hub`.
   After that, speaking never touches the network.
 - **You hear the robotic macOS voice:** Kokoro failed, and the reason is
-  printed on stderr. Run `agent-voice doctor`, or `speak -v "test"` to see
-  mlx-audio's own output.
+  printed on stderr. Run `agent-voice doctor`, or `agent-voice say -v "test"`
+  to see mlx-audio's own output.
 - **Silence, no error:** check `agent-voice doctor` for `muted: yes`, and make
   sure `AGENT_VOICE_MUTE` isn't set in that shell.
 
@@ -135,4 +135,4 @@ uv run pytest
 ```
 
 The tests don't load the model. To check the real voice, run
-`uv run speak "test"`.
+`uv run agent-voice say "test"`.

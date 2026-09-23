@@ -1,6 +1,6 @@
 ---
 name: agent-voice
-description: Speak a short status update aloud with the `speak` command, so a user who is working on something else hears it. Use when you finish a task or a significant step, when you are blocked and need the user's input or approval, or when something failed that the user has to act on. Not for routine progress.
+description: Speak a short status update aloud with the `agent-voice say` command, so a user who is working on something else hears it. Use when you finish a task or a significant step, when you are blocked and need the user's input or approval, or when something failed that the user has to act on. Not for routine progress.
 ---
 
 # Speaking updates aloud
@@ -9,10 +9,10 @@ The user runs you in the background while doing other work. Terminal text goes
 unnoticed; a spoken sentence does not. Announce with:
 
 ```bash
-speak "The login bug is fixed and the tests pass. Nothing needs your attention."
+agent-voice say "The login bug is fixed and the tests pass. Nothing needs your attention."
 ```
 
-`speak` blocks for the few seconds it takes to talk, then exits. Kokoro, a local
+It blocks for the few seconds it takes to talk, then exits. Kokoro, a local
 neural voice, does the speaking; if it cannot, macOS `say` takes over by itself.
 
 ## When to speak
@@ -40,13 +40,13 @@ answer. One announcement per turn, at the end, is the norm.
   shell leaves it alone:
 
   ```bash
-  speak <<'EOF'
+  agent-voice say <<'EOF'
   The "retry" flag now defaults to off. Can you confirm that's what you want?
   EOF
   ```
 
 ## If it does not work
 
-If `speak` is not found or exits with an error, carry on without it. Do not
-retry, install anything, or tell the user about it more than once. When the
-user has muted it (`agent-voice mute`), `speak` returns silently; nothing to do.
+If `agent-voice` is not found or exits with an error, carry on without it. Do
+not retry, install anything, or tell the user about it more than once. When the
+user has muted it (`agent-voice mute`), it returns silently; nothing to do.

@@ -1,4 +1,9 @@
-"""`speak` (say one thing) and `agent-voice` (everything else)."""
+"""The `agent-voice` command.
+
+There is deliberately no bare `speak` alias: Homebrew's espeak-ng installs a
+`speak`, and /opt/homebrew/bin usually precedes ~/.local/bin on PATH, so an
+agent running `speak` would get espeak's voice instead of this one.
+"""
 
 from __future__ import annotations
 
@@ -32,7 +37,7 @@ def _read_text(args: argparse.Namespace) -> str:
 def _run_say(args: argparse.Namespace) -> int:
     text = _read_text(args)
     if not text.strip():
-        print("speak: nothing to say (pass text as arguments or on stdin)", file=sys.stderr)
+        print("agent-voice say: nothing to say (pass text as arguments or on stdin)", file=sys.stderr)
         return 2
     options = {"voice": args.voice, "speed": args.speed, "fallback": not args.no_fallback, "verbose": args.verbose}
     try:
@@ -42,15 +47,9 @@ def _run_say(args: argparse.Namespace) -> int:
         else:
             speech.say(text, **options)
     except Exception as exc:
-        print(f"speak: {exc}", file=sys.stderr)
+        print(f"agent-voice say: {exc}", file=sys.stderr)
         return 1
     return 0
-
-
-def speak_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="speak", description="Say something aloud.")
-    _add_say_arguments(parser)
-    return _run_say(parser.parse_args(argv))
 
 
 # MARK: - agent-voice subcommands
@@ -105,7 +104,7 @@ def _uninstall_skill(args: argparse.Namespace) -> int:
 
 def _mute(args: argparse.Namespace) -> int:
     speech.set_muted(True)
-    print("muted — `speak` stays silent until: agent-voice unmute")
+    print("muted — `agent-voice say` stays silent until: agent-voice unmute")
     return 0
 
 
@@ -142,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"agent-voice {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    say = commands.add_parser("say", help="say something aloud (same as `speak`)")
+    say = commands.add_parser("say", help="say something aloud; blocks until finished")
     _add_say_arguments(say)
     say.set_defaults(run=_run_say)
 
@@ -170,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--print", action="store_true", help="print the SKILL.md and exit")
         command.set_defaults(run=run)
 
-    commands.add_parser("mute", help="silence `speak` everywhere (e.g. for a meeting)").set_defaults(run=_mute)
+    commands.add_parser("mute", help="silence every agent (e.g. for a meeting)").set_defaults(run=_mute)
     commands.add_parser("unmute", help="undo mute").set_defaults(run=_unmute)
     commands.add_parser("doctor", help="check the install").set_defaults(run=_doctor)
 

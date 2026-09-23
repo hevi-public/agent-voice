@@ -28,7 +28,7 @@ HARNESSES = tuple(USER_DIRS)
 
 INSTRUCTION = (
     "When you finish a task, need my input, or hit a failure I should know about, "
-    'announce it aloud with the agent-voice skill (`speak "..."`).'
+    'announce it aloud with the agent-voice skill (`agent-voice say "..."`).'
 )
 
 

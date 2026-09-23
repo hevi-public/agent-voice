@@ -21,7 +21,6 @@ dependencies = [
 ]
 
 [project.scripts]
-speak = "agent_voice.cli:speak_main"
 agent-voice = "agent_voice.cli:main"
 
 [project.urls]
