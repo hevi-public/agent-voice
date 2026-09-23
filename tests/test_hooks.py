@@ -1,8 +1,6 @@
 import io
 import json
-import os
 import subprocess
-import time
 
 import pytest
 
@@ -10,7 +8,7 @@ from agent_voice import cli, hooks
 
 PROGRAM = "/Users/me/.local/bin/agent-voice"
 
-# Trimmed from real Claude Code 2.1.267 payloads: the dialog opens...
+# Trimmed from a real Claude Code 2.1.267 PermissionRequest payload.
 CLAUDE_REQUEST = {
     "session_id": "ce3b6ff5-4889",
     "cwd": "/Users/me/Projects/speech_test",
@@ -18,14 +16,6 @@ CLAUDE_REQUEST = {
     "hook_event_name": "PermissionRequest",
     "tool_name": "Bash",
     "tool_input": {"command": "rm -rf build && git push --force", "description": "i'll push this up now yeah?"},
-}
-# ...and is still open six seconds later.
-CLAUDE_WAITING = {
-    "session_id": "ce3b6ff5-4889",
-    "cwd": "/Users/me/Projects/speech_test",
-    "hook_event_name": "Notification",
-    "message": "Claude needs your permission",
-    "notification_type": "permission_prompt",
 }
 
 
@@ -42,17 +32,16 @@ def spawned(monkeypatch):
 
 
 def said(calls):
-    return [argv[-1] for argv, _ in calls if "say" in argv]
+    return [argv[-1] for argv, _ in calls]
 
 
 # MARK: - what is said
 
 
-def test_the_wording_names_no_agent():
-    assert hooks.announcement(CLAUDE_WAITING, "Bash") == (
+def test_claude_prompt_names_the_tool_kind_and_project_but_no_agent():
+    assert hooks.announcement("claude", CLAUDE_REQUEST) == (
         "Your approval is needed to run a shell command in speech test."
     )
-    assert hooks.announcement(CLAUDE_WAITING) == "Your approval is needed in speech test."
 
 
 @pytest.mark.parametrize(
@@ -65,118 +54,109 @@ def test_the_wording_names_no_agent():
     ],
 )
 def test_tool_kinds(tool, action):
-    assert action in hooks.announcement(CLAUDE_WAITING, tool)
+    assert action in hooks.announcement("claude", {**CLAUDE_REQUEST, "tool_name": tool})
 
 
 def test_an_unspeakable_folder_name_is_left_out():
-    event = {**CLAUDE_WAITING, "cwd": "/tmp/claude-501/7b0a1c31-fa7e-4225-ad1d-46955db3bbb2/scratchpad/ツール"}
-    assert hooks.announcement(event, "Bash") == "Your approval is needed to run a shell command."
+    event = {**CLAUDE_REQUEST, "cwd": "/tmp/claude-501/7b0a1c31-fa7e-4225-ad1d-46955db3bbb2/scratchpad/ツール"}
+    assert hooks.announcement("claude", event) == "Your approval is needed to run a shell command."
 
 
-def test_other_notifications_are_ignored():
-    assert hooks.announcement({**CLAUDE_WAITING, "notification_type": "idle_prompt"}) is None
+def test_other_events_are_ignored():
+    assert hooks.announcement("claude", {**CLAUDE_REQUEST, "hook_event_name": "PreToolUse"}) is None
+    assert hooks.announcement("claude", {"hook_event_name": "Notification", "notification_type": "permission_prompt"}) is None
+    assert hooks.announcement("copilot", {"notification_type": "agent_completed"}) is None
 
 
 def test_copilot_permission_prompt():
     event = {"cwd": "/Users/me/work/billing-api", "notification_type": "permission_prompt", "message": "…"}
-    assert hooks.announcement(event) == "Your approval is needed in billing api."
+    assert hooks.announcement("copilot", event) == "Your approval is needed in billing api."
+
+
+# MARK: - the project's name
+
+
+def make_repo(root):
+    (root / ".git" / "worktrees").mkdir(parents=True)
+    return root
+
+
+def make_worktree(main, where, name="recursing-elgamal-3be4c7"):
+    gitdir = main / ".git" / "worktrees" / name
+    gitdir.mkdir(parents=True)
+    where.mkdir(parents=True)
+    (where / ".git").write_text(f"gitdir: {gitdir}\n")
+    return where
+
+
+def test_a_worktree_is_named_after_its_main_checkout(tmp_path):
+    main = make_repo(tmp_path / "speech_test")
+    worktree = make_worktree(main, main / ".claude" / "worktrees" / "recursing-elgamal-3be4c7")
+    assert hooks.project_folder(worktree / "Sources" / "natter") == main
+    assert hooks._project(str(worktree)) == "speech test"
+
+
+def test_a_relative_gitdir_is_followed(tmp_path):
+    main = make_repo(tmp_path / "billing-api")
+    where = tmp_path / "elsewhere" / "wt"
+    (main / ".git" / "worktrees" / "wt").mkdir()
+    where.mkdir(parents=True)
+    (where / ".git").write_text("gitdir: ../../billing-api/.git/worktrees/wt\n")
+    assert hooks.project_folder(where) == main
+
+
+def test_a_bare_repositorys_worktree_drops_the_git_suffix(tmp_path):
+    bare = tmp_path / "natter.git"
+    (bare / "worktrees" / "main").mkdir(parents=True)
+    where = tmp_path / "natter-main"
+    where.mkdir()
+    (where / ".git").write_text(f"gitdir: {bare / 'worktrees' / 'main'}\n")
+    assert hooks._project(str(where)) == "natter"
+
+
+def test_a_subfolder_is_named_after_its_repository(tmp_path):
+    main = make_repo(tmp_path / "speech_test")
+    assert hooks.project_folder(main / "Sources" / "NatterSpeech") == main
+
+
+def test_a_submodule_keeps_its_own_name(tmp_path):
+    parent = make_repo(tmp_path / "app")
+    sub = parent / "vendor" / "lib"
+    (parent / ".git" / "modules" / "lib").mkdir(parents=True)
+    sub.mkdir(parents=True)
+    (sub / ".git").write_text("gitdir: ../../.git/modules/lib\n")
+    assert hooks.project_folder(sub) == sub
+
+
+def test_outside_git_the_folder_itself_is_used(tmp_path):
+    assert hooks.project_folder(tmp_path / "notes") == tmp_path / "notes"
 
 
 # MARK: - the hook command
 
 
-def test_claude_dialog_is_noted_silently_then_announced_when_still_waiting(spawned):
-    assert hooks.handle("claude", json.dumps(CLAUDE_REQUEST)) is None
-    assert said(spawned) == []
-    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
-    assert said(spawned) == ["Your approval is needed to run a shell command in speech test."]
-    assert spawned[-1][1]["start_new_session"] is True
-
-
-def notes_folder(tmp_path):
-    return tmp_path / "state" / "pending" / CLAUDE_REQUEST["session_id"]
-
-
-def test_the_announcement_clears_the_sessions_notes(spawned, tmp_path):
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
-    assert notes_folder(tmp_path).is_dir()
-    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
-    assert not notes_folder(tmp_path).exists()
-
-
-def test_every_note_schedules_its_own_deletion(spawned, tmp_path):
+def test_hook_speaks_at_once_in_a_detached_process(spawned):
     hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
     [(argv, kwargs)] = spawned
-    [note] = notes_folder(tmp_path).iterdir()
-    assert argv[:2] == ["/bin/sh", "-c"] and argv[3:] == [str(hooks.NOTE_LIFETIME), str(note), str(note.parent)]
+    assert argv[-3:] == ["say", "--", "Your approval is needed to run a shell command in speech test."]
     assert kwargs["start_new_session"] is True
-
-
-def test_a_dialog_answered_in_time_leaves_nothing_behind(monkeypatch, tmp_path):
-    """The real `sleep; rm`, with the lifetime cut to zero."""
-    monkeypatch.setattr(hooks, "NOTE_LIFETIME", 0)
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
-    deadline = time.time() + 5
-    while notes_folder(tmp_path).exists() and time.time() < deadline:
-        time.sleep(0.05)
-    assert not notes_folder(tmp_path).exists()
-
-
-def test_a_note_older_than_its_lifetime_is_never_used(spawned, tmp_path):
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
-    [note] = notes_folder(tmp_path).iterdir()
-    old = time.time() - hooks.NOTE_LIFETIME - 1
-    os.utime(note, (old, old))
-    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
-    assert said(spawned) == ["Your approval is needed in speech test."]
-
-
-def test_the_newest_dialog_wins(spawned):
-    hooks.handle("claude", json.dumps({**CLAUDE_REQUEST, "tool_use_id": "toolu_1"}))
-    time.sleep(0.01)
-    hooks.handle("claude", json.dumps({**CLAUDE_REQUEST, "tool_use_id": "toolu_2", "tool_name": "Edit"}))
-    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
-    assert said(spawned) == ["Your approval is needed to edit a file in speech test."]
 
 
 def test_nothing_the_model_wrote_is_spoken(spawned):
     hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
-    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
     for leaked in ("rm", "push", "force", "yeah", "Claude"):
         assert leaked not in said(spawned)[0]
 
 
-def test_the_noted_tool_is_used_once(spawned):
+def test_the_hook_leaves_no_files(spawned, tmp_path):
     hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
-    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
-    hooks.handle("claude", json.dumps(CLAUDE_WAITING))
-    assert said(spawned)[1] == "Your approval is needed in speech test."
-
-
-def test_sessions_do_not_share_their_tool(spawned):
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
-    hooks.handle("claude", json.dumps({**CLAUDE_WAITING, "session_id": "other"}))
-    assert said(spawned) == ["Your approval is needed in speech test."]
-
-
-@pytest.mark.parametrize("field", ["session_id", "tool_use_id"])
-def test_ids_are_never_used_as_paths(spawned, tmp_path, field):
-    hooks.handle("claude", json.dumps({**CLAUDE_REQUEST, field: "../../escape"}))
-    assert not (tmp_path / "escape").exists()
-    assert not (tmp_path / "state" / "escape").exists()
-
-
-def test_copilot_notification_is_announced(spawned):
-    event = {"sessionId": "s1", "cwd": "/w/billing-api", "notification_type": "permission_prompt"}
-    hooks.handle("copilot", json.dumps(event))
-    assert said(spawned) == ["Your approval is needed in billing api."]
+    assert not (tmp_path / "state").exists()
 
 
 @pytest.mark.parametrize("raw", ["", "not json", "[1, 2]", json.dumps({"hook_event_name": "Stop"})])
-def test_hook_ignores_anything_else(spawned, raw, tmp_path):
+def test_hook_ignores_anything_else(spawned, raw):
     assert hooks.handle("claude", raw) is None
     assert spawned == []
-    assert not (tmp_path / "state").exists()
 
 
 def test_cli_hook_is_silent_and_always_succeeds(monkeypatch, capsys):
@@ -184,7 +164,7 @@ def test_cli_hook_is_silent_and_always_succeeds(monkeypatch, capsys):
         raise OSError("no python")
 
     monkeypatch.setattr(hooks, "handle", explode)
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(CLAUDE_WAITING)))
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(CLAUDE_REQUEST)))
     assert cli.main(["hook", "--from", "claude"]) == 0
     assert capsys.readouterr().out == ""
 
@@ -219,17 +199,30 @@ def test_claude_hook_merges_into_existing_settings(tmp_path):
     ours = {"type": "command", "command": f"{PROGRAM} hook --from claude", "async": True, "timeout": 10}
     groups = data["hooks"]["PermissionRequest"]
     assert groups == [existing["hooks"]["PermissionRequest"][0], {"hooks": [ours]}]
-    assert data["hooks"]["Notification"] == [{"matcher": "permission_prompt", "hooks": [ours]}]
+    assert "Notification" not in data["hooks"]
     assert json.loads((home / ".claude/settings.json.agent-voice-backup").read_text()) == existing
 
     assert hooks.install(["claude"], home=home, program=PROGRAM)[0].status == "unchanged"
     assert hooks.install(["claude"], home=home, program="/elsewhere/agent-voice")[0].status == "updated"
     after_update = json.loads(settings.read_text())["hooks"]
-    assert len(after_update["PermissionRequest"]) == 2 and len(after_update["Notification"]) == 1
+    assert len(after_update["PermissionRequest"]) == 2
 
     assert hooks.uninstall(["claude"], home=home)[0].status == "removed"
     assert json.loads(settings.read_text()) == existing
     assert hooks.uninstall(["claude"], home=home)[0].status == "absent"
+
+
+def test_reinstalling_clears_the_delayed_notification_an_older_version_added(tmp_path):
+    home = home_with(tmp_path, ".claude")
+    ours = {"type": "command", "command": f"{PROGRAM} hook --from claude", "async": True, "timeout": 10}
+    theirs = {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "chime.sh"}]}
+    (home / ".claude/settings.json").write_text(json.dumps({"hooks": {
+        "PermissionRequest": [{"hooks": [ours]}],
+        "Notification": [theirs, {"matcher": "permission_prompt", "hooks": [ours]}],
+    }}))
+    assert hooks.install(["claude"], home=home, program=PROGRAM)[0].status == "updated"
+    data = json.loads((home / ".claude/settings.json").read_text())
+    assert data["hooks"] == {"PermissionRequest": [{"hooks": [ours]}], "Notification": [theirs]}
 
 
 def test_claude_hook_into_a_fresh_settings_file(tmp_path):

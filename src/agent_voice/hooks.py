@@ -1,14 +1,8 @@
 """Announces tool-approval prompts through the agents' own hooks.
 
-Claude Code: a `Notification` hook matched to `permission_prompt`, which fires
-only once a dialog has waited about six seconds — approve sooner and nothing is
-said. Its payload does not name the tool, so a `PermissionRequest` hook, which
-fires the moment the dialog appears (and only then: an already-allowed tool
-fires `PreToolUse` alone), silently notes the tool per session for the
-notification to use; each note deletes itself within half a minute. All
-observed with Claude Code 2.1.267, which also showed that the transcript
-cannot stand in for the note: six seconds into an open dialog it does not yet
-record the tool call.
+Claude Code: a `PermissionRequest` hook. It fires the moment an approval
+dialog appears, and only then: an already-allowed tool fires `PreToolUse`
+alone (observed with Claude Code 2.1.267). Its payload names the tool.
 
 Copilot CLI: a `notification` hook, filtered to `notification_type:
 permission_prompt`. Its own `permissionRequest` event is no use here: it fires
@@ -21,13 +15,12 @@ What is said is a summons, never the command: "Your approval is needed to run
 a shell command in natter." The answer happens on screen, where the whole
 command is; reading part of it aloud would make the unread part sound safe.
 Only names the harness or the user chose are spoken — a tool kind looked up
-from Claude's own tool names, and the project folder's name — nothing the
-model wrote.
+from Claude's own tool names, and the project's folder name — nothing the
+model wrote. The hook keeps no state between calls.
 """
 
 from __future__ import annotations
 
-import contextlib
 import copy
 import json
 import os
@@ -35,12 +28,8 @@ import re
 import shutil
 import subprocess
 import sys
-import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
-
-from .speech import state_dir
 
 HARNESSES = ("claude", "copilot")
 
@@ -76,104 +65,57 @@ def _tool_action(tool_name: str) -> str:
     return "use a tool"
 
 
+def _worktree_main(folder: Path, git_file: Path) -> Path | None:
+    """The main checkout behind a git worktree, whose `.git` is a file reading
+    `gitdir: <main>/.git/worktrees/<name>`; None for anything else (a submodule's
+    `.git` file points into `.git/modules/` instead)."""
+    try:
+        first = git_file.read_text(encoding="utf-8").splitlines()[0]
+    except (OSError, IndexError, UnicodeDecodeError):
+        return None
+    if not first.startswith("gitdir:"):
+        return None
+    gitdir = (folder / first[len("gitdir:"):].strip()).resolve()
+    if gitdir.parent.name != "worktrees":
+        return None
+    common = gitdir.parent.parent  # <main>/.git, or a bare repository
+    return common.parent if common.name == ".git" else common
+
+
+def project_folder(cwd: Path) -> Path:
+    """The folder a session's project is named after: the repository's top
+    level — the main checkout's, for a worktree — or `cwd` outside git."""
+    for folder in (cwd, *cwd.parents):
+        git = folder / ".git"
+        if git.is_dir():
+            return folder
+        if git.is_file():
+            return _worktree_main(folder, git) or folder
+    return cwd
+
+
 def _project(cwd: object) -> str:
-    """The project folder's name, made speakable; "" when there is none worth saying."""
+    """The project's name, made speakable; "" when there is none worth saying."""
     if not isinstance(cwd, str) or not cwd:
         return ""
-    name = re.sub(r"[-_.]+", " ", Path(cwd).name).strip()
+    name = project_folder(Path(cwd)).name.removesuffix(".git")
+    name = re.sub(r"[-_.]+", " ", name).strip()
     return name if re.fullmatch(r"[A-Za-z0-9 ]{1,40}", name) else ""
 
 
-def announcement(event: dict, tool_name: str | None = None) -> str | None:
-    """The sentence for an approval-prompt notification (Claude Code's and
-    Copilot CLI's share the shape), or None for any other event. Worded to fit
-    any agent: nothing says which one is asking."""
-    if event.get("notification_type") != "permission_prompt":
+def announcement(harness: str, event: dict) -> str | None:
+    """The sentence for an approval prompt, or None for any other event.
+    Worded to fit any agent: nothing says which one is asking."""
+    if harness == "claude" and event.get("hook_event_name") == "PermissionRequest":
+        tool = event.get("tool_name")
+        what = f" to {_tool_action(tool)}" if isinstance(tool, str) and tool else ""
+    elif harness == "copilot" and event.get("notification_type") == "permission_prompt":
+        what = ""  # Copilot's notification does not say which tool
+    else:
         return None
     project = _project(event.get("cwd"))
     where = f" in {project}" if project else ""
-    what = f" to {_tool_action(tool_name)}" if tool_name else ""
     return f"Your approval is needed{what}{where}."
-
-
-# MARK: - the tool a prompt is about
-
-
-# How long a note may wait for its notification. The notification comes about
-# six seconds after the dialog opens; a note older than this belongs to an
-# earlier dialog and is never used, and each note deletes itself at this age.
-NOTE_LIFETIME = 30
-# Backstop for notes whose self-deletion never ran (the Mac restarted, say).
-SWEEP_AGE = 3600
-
-_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
-
-
-def _session_notes(event: dict) -> Path | None:
-    session = event.get("session_id")
-    if not isinstance(session, str) or not _ID.fullmatch(session):
-        return None
-    return state_dir() / "pending" / session
-
-
-def _remember_tool(event: dict) -> None:
-    """Notes the tool a Claude Code dialog is asking about, for the notification
-    that follows if the dialog is still open six seconds later.
-
-    One file per dialog, which a detached `sleep; rm` deletes after
-    NOTE_LIFETIME whatever happens — so a dialog answered in time, whose
-    notification never comes, leaves nothing behind.
-    """
-    folder, tool = _session_notes(event), event.get("tool_name")
-    if folder is None or not isinstance(tool, str):
-        return
-    request = event.get("tool_use_id")
-    name = request if isinstance(request, str) and _ID.fullmatch(request) else uuid.uuid4().hex
-    note = folder / name
-    for _ in range(2):  # the folder can vanish between mkdir and write: a sibling's cleanup emptied it
-        folder.mkdir(parents=True, exist_ok=True)
-        try:
-            note.write_text(tool, encoding="utf-8")
-            break
-        except FileNotFoundError:
-            continue
-    else:
-        return
-    subprocess.Popen(
-        ["/bin/sh", "-c", 'sleep "$0"; rm -f "$1"; rmdir "$2" 2>/dev/null; exit 0',
-         str(NOTE_LIFETIME), str(note), str(folder)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    _sweep(folder.parent)
-
-
-def _sweep(pending: Path) -> None:
-    cutoff = time.time() - SWEEP_AGE
-    for folder in pending.iterdir():
-        for note in folder.iterdir() if folder.is_dir() else ():
-            if note.stat().st_mtime < cutoff:
-                note.unlink(missing_ok=True)
-        with contextlib.suppress(OSError):
-            folder.rmdir()  # only if empty
-
-
-def _recall_tool(event: dict) -> str | None:
-    """The tool of this session's newest note, if young enough; clears the session's notes."""
-    folder = _session_notes(event)
-    if folder is None or not folder.is_dir():
-        return None
-    notes = sorted(folder.iterdir(), key=lambda note: note.stat().st_mtime)
-    tool = None
-    if notes and time.time() - notes[-1].stat().st_mtime <= NOTE_LIFETIME:
-        tool = notes[-1].read_text(encoding="utf-8")
-    for note in notes:
-        note.unlink(missing_ok=True)
-    with contextlib.suppress(OSError):
-        folder.rmdir()
-    return tool
 
 
 def handle(harness: str, raw: str) -> str | None:
@@ -188,11 +130,7 @@ def handle(harness: str, raw: str) -> str | None:
         return None
     if not isinstance(event, dict):
         return None
-    if harness == "claude" and event.get("hook_event_name") == "PermissionRequest":
-        _remember_tool(event)
-        return None
-    # Copilot CLI's notification has no tool, and nothing records one for it.
-    text = announcement(event, _recall_tool(event) if harness == "claude" else None)
+    text = announcement(harness, event)
     if text is None:
         return None
     # Detached, so the agent is never held up by the seconds it takes to talk.
@@ -266,11 +204,12 @@ def _read_settings(path: Path) -> dict:
     return data
 
 
-# Claude Code event -> the matcher group fields our handler sits under.
-CLAUDE_EVENTS = {
-    "PermissionRequest": {},
-    "Notification": {"matcher": "permission_prompt"},
-}
+# Claude Code events our handler is installed under.
+CLAUDE_EVENTS = ("PermissionRequest",)
+# Every event an agent-voice version ever installed under, so an install or an
+# uninstall also clears what an older version left (0.1.0 briefly used the
+# delayed Notification too).
+CLAUDE_OWNED_EVENTS = ("PermissionRequest", "Notification")
 
 
 def _our_claude_handlers(data: dict) -> list[dict]:
@@ -279,7 +218,7 @@ def _our_claude_handlers(data: dict) -> list[dict]:
         return []
     return [
         handler
-        for event in CLAUDE_EVENTS
+        for event in CLAUDE_OWNED_EVENTS
         if isinstance(hooks.get(event), list)
         for group in hooks[event]
         if isinstance(group, dict) and isinstance(group.get("hooks"), list)
@@ -289,14 +228,14 @@ def _our_claude_handlers(data: dict) -> list[dict]:
 
 
 def _install_claude(settings: Path, command: str) -> str:
-    """Adds our two hooks to Claude Code's settings, keeping everything else."""
+    """Adds our hook to Claude Code's settings, keeping everything else."""
     data = _read_settings(settings)
     had_ours = bool(_our_claude_handlers(data))
     wanted = copy.deepcopy(data)
     _remove_claude_hooks(wanted)
     handler = {"type": "command", "command": command, "async": True, "timeout": 10}
-    for event, fields in CLAUDE_EVENTS.items():
-        wanted.setdefault("hooks", {}).setdefault(event, []).append({**fields, "hooks": [dict(handler)]})
+    for event in CLAUDE_EVENTS:
+        wanted.setdefault("hooks", {}).setdefault(event, []).append({"hooks": [dict(handler)]})
     if wanted == data:
         return "unchanged"
     if settings.exists():
@@ -312,7 +251,7 @@ def _remove_claude_hooks(data: dict) -> bool:
     if not _our_claude_handlers(data):
         return False
     hooks = data["hooks"]
-    for event in CLAUDE_EVENTS:
+    for event in CLAUDE_OWNED_EVENTS:
         if not isinstance(hooks.get(event), list):
             continue
         kept_groups = []

@@ -30,6 +30,28 @@ PyTorch, spaCy). It needs no admin rights.
 Upgrade with `uv tool upgrade agent-voice`. After an upgrade, run
 `agent-voice install-skill --force` if the skill text changed.
 
+**Before `install-hooks`, back up `~/.claude/settings.json`.** It's the one
+file agent-voice edits rather than creates; see below.
+
+## Files it touches
+
+Everything agent-voice writes, and whether it's a file of yours that it
+edits (**back it up first**) or a file that belongs to agent-voice alone.
+
+| Path | Written by | What happens |
+|---|---|---|
+| `~/.claude/settings.json` | `install-hooks`, `uninstall-hooks` | **Edited: back it up first.** One `PermissionRequest` hook entry is added (or removed); your other settings and hooks are kept. The file is rewritten with 2-space indentation, so its formatting may change. On the first edit a copy is saved next to it as `settings.json.agent-voice-backup`, but don't rely on that as your only backup. If the file isn't valid JSON, agent-voice stops and changes nothing. |
+| `~/.copilot/hooks/agent-voice.json` | `install-hooks`, `uninstall-hooks` | agent-voice's own file, created and deleted whole. |
+| `~/.claude/skills/agent-voice/SKILL.md`, `~/.copilot/skills/agent-voice/SKILL.md` | `install-skill`, `uninstall-skill` | agent-voice's own folders. A `SKILL.md` you've edited is kept unless you pass `--force`. |
+| `<repo>/.claude/skills/agent-voice/`, `<repo>/.github/skills/agent-voice/` | `install-skill --project <repo>` | Same, inside that repo, where they'd be committed with it. |
+| `~/.agent-voice/` | speaking, `mute` | Two small files: `playback.lock` (so two agents take turns) and `muted` (only while muted). Nothing else accumulates. Move it with `AGENT_VOICE_HOME`. |
+| `~/.cache/huggingface/hub/` | `prefetch` | The voice model, about 340 MB, in the standard Hugging Face cache. |
+| `~/.local/bin/agent-voice`, `~/.local/share/uv/tools/agent-voice/` | `uv tool install` | The command and its Python environment (about 1 GB). `uv tool uninstall agent-voice` removes both. |
+
+The installers never create `~/.claude` or `~/.copilot`, and never touch
+`CLAUDE.md`, `copilot-instructions.md` or any other instruction file:
+`install-skill` prints the line to add, and you add it yourself.
+
 ## Agent setup
 
 `agent-voice install-skill` writes one `SKILL.md` to:
@@ -75,26 +97,26 @@ run `prefetch`.
 
 ## Approval announcements
 
-`agent-voice install-hooks` makes agents speak up when a tool call has been
-waiting for your approval for a few seconds: *"Your approval is needed to run
-a shell command in billing api."* Approve within those seconds and nothing is
-said. It uses the agents' own hooks:
+`agent-voice install-hooks` makes agents say when a tool call is waiting for
+your approval: *"Your approval is needed to run a shell command in billing
+api."* It uses the agents' own hooks:
 
-| Agent | Hooks | Written to |
+| Agent | Hook | Written to |
 |---|---|---|
-| Claude Code | `Notification` (`permission_prompt`, about 6 s after the dialog opens) speaks; `PermissionRequest` notes which tool it's for in `~/.agent-voice/pending/`, a note that deletes itself within 30 s | two entries merged into `~/.claude/settings.json` (a backup is kept next to it) |
+| Claude Code | `PermissionRequest`, which fires as the approval dialog opens | one entry merged into `~/.claude/settings.json` |
 | Copilot CLI | `notification` (`permission_prompt`) | its own file, `~/.copilot/hooks/agent-voice.json` |
 | Copilot in VS Code | none | VS Code has no approval event, so it can't be announced |
 
 The announcement is a summons, not a read-out. It names the kind of tool (from
 the agent's own tool names; Copilot's notification doesn't carry one, so there
-it's just *"Your approval is needed in billing api."*) and the project folder.
-It never says the command or anything else the model wrote: you approve on
-screen, where the whole command is, and reading part of it aloud could make
-the rest sound safe. The hook returns immediately and speaks in the
-background, so the agent never waits for the voice. It follows the same
-folder rule as `install-skill`. `agent-voice uninstall-hooks` removes exactly
-what it added.
+it's just *"Your approval is needed in billing api."*) and the project: the
+repository's name, even from a subfolder or a git worktree, or the folder's
+name outside git. It never says the command or anything else the model wrote:
+you approve on screen, where the whole command is, and reading part of it
+aloud could make the rest sound safe. The hook returns immediately and speaks
+in the background, so the agent never waits for the voice, and it keeps no
+state between prompts. It follows the same folder rule as `install-skill`.
+`agent-voice uninstall-hooks` removes exactly what it added.
 
 ## Commands
 
