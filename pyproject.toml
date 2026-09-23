@@ -3,6 +3,8 @@ name = "agent-voice"
 version = "0.1.0"
 description = "Spoken status updates for coding agents (Claude Code, GitHub Copilot): local Kokoro text-to-speech on Apple Silicon."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 # mlx-audio needs >= 3.10; misaki caps at < 3.13.
 requires-python = ">=3.10,<3.13"
 dependencies = [

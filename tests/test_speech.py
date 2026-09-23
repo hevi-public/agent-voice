@@ -91,3 +91,23 @@ def test_bad_speed_env_is_reported(monkeypatch):
     monkeypatch.setenv("AGENT_VOICE_SPEED", "fast")
     with pytest.raises(speech.VoiceError, match="AGENT_VOICE_SPEED"):
         speech.default_speed()
+
+
+def test_speaking_never_downloads_the_model(monkeypatch, commands, capsys):
+    """Only prefetch may contact Hugging Face; a missing model means falling back, not downloading."""
+    import huggingface_hub
+    import mlx_audio.utils
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    def cache_only(repo_id, *, local_files_only=False, **kwargs):
+        assert local_files_only, "speaking reached for the network"
+        raise LocalEntryNotFoundError("not cached")
+
+    def download(*args, **kwargs):
+        raise AssertionError("speaking downloaded the model")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", cache_only)
+    monkeypatch.setattr(mlx_audio.utils, "get_model_path", download)
+    monkeypatch.setattr(speech, "_model", None)
+    assert speech.say("hello") == "say"
+    assert "agent-voice prefetch" in capsys.readouterr().err

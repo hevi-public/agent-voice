@@ -62,6 +62,11 @@ for Copilot:
   `"chat.tools.terminal.autoApprove": { "agent-voice": true }`
 - Copilot CLI: `copilot --allow-tool='shell(agent-voice)'`
 
+**Network:** only `agent-voice prefetch` contacts Hugging Face, to download the
+model. Speaking reads the local cache and never touches the network. If the
+model isn't downloaded yet, `say` falls back to macOS `say` and tells you to
+run `prefetch`.
+
 ## Commands
 
 ```text
@@ -98,6 +103,7 @@ save("Deploy finished.", "done.wav")
 audio, sample_rate = synthesize("Deploy finished.", voice="bf_emma")  # numpy samples
 ```
 
+Call `prefetch()` once (or run `agent-voice prefetch`) before the first `say`.
 The model loads once per process: the first call takes a couple of seconds,
 and later calls take only generation time. `say(..., fallback=False)` raises
 an error instead of falling back to macOS `say`.
@@ -120,7 +126,6 @@ git.
 - **`agent-voice prefetch` can't reach Hugging Face** (a corporate proxy, for
   example): download the model on another network, or set `HF_ENDPOINT` to
   your company's mirror. The model is cached in `~/.cache/huggingface/hub`.
-  After that, speaking never touches the network.
 - **You hear the robotic macOS voice:** Kokoro failed, and the reason is
   printed on stderr. Run `agent-voice doctor`, or `agent-voice say -v "test"`
   to see mlx-audio's own output.
@@ -136,3 +141,7 @@ uv run pytest
 
 The tests don't load the model. To check the real voice, run
 `uv run agent-voice say "test"`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

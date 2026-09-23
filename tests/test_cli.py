@@ -47,3 +47,11 @@ def test_failure_exits_nonzero_with_a_message(monkeypatch, capsys):
     assert cli.main(["say", "hi"]) == 1
     assert "no audio device" in capsys.readouterr().err
 
+
+
+def test_say_turns_hugging_face_offline(spoken, monkeypatch):
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    cli.main(["say", "hi"])
+    import os
+
+    assert os.environ["HF_HUB_OFFLINE"] == "1"

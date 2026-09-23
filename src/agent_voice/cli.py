@@ -35,6 +35,10 @@ def _read_text(args: argparse.Namespace) -> str:
 
 
 def _run_say(args: argparse.Namespace) -> int:
+    # Speaking needs nothing from Hugging Face; this makes huggingface_hub and
+    # transformers refuse to try. Set before either is imported (speech imports
+    # them lazily), since both read it at import time.
+    os.environ["HF_HUB_OFFLINE"] = "1"
     text = _read_text(args)
     if not text.strip():
         print("agent-voice say: nothing to say (pass text as arguments or on stdin)", file=sys.stderr)
@@ -56,12 +60,8 @@ def _run_say(args: argparse.Namespace) -> int:
 
 
 def _prefetch(args: argparse.Namespace) -> int:
-    print(f"downloading {speech.MODEL_REPO} (about 340 MB, once)…")
-    path = speech.model_path(download=True)
-    print("warming up the voice…")
-    # One real sentence: this also loads spaCy's English model, so a broken
-    # install fails here rather than at the first announcement.
-    speech.synthesize("Ready.", verbose=args.verbose)
+    print(f"fetching {speech.MODEL_REPO} (about 340 MB, first time only) and testing it…")
+    path = speech.prefetch(verbose=args.verbose)
     print(f"ready: {path}")
     return 0
 

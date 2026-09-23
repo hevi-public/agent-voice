@@ -89,12 +89,14 @@ def lang_code(voice: str) -> str:
 # MARK: - model
 
 
-def model_path(download: bool = True) -> Path:
+def model_path(download: bool = False) -> Path:
     """The local snapshot of the Kokoro weights.
 
-    Asks the Hugging Face cache before the network: once the model is on disk,
-    an announcement should neither wait on nor fail behind a corporate proxy
-    just to learn that nothing changed upstream.
+    Hugging Face is contacted for one reason only: downloading the model, and
+    only when `download` is true — which only `prefetch` passes. Speaking reads
+    the cache and never goes to the network, so an announcement can neither wait
+    on nor fail behind a proxy, and a missing model is an error that says to
+    prefetch rather than a 340 MB download inside an agent's shell command.
     """
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import LocalEntryNotFoundError
@@ -108,6 +110,15 @@ def model_path(download: bool = True) -> Path:
         if not download:
             raise VoiceError("the Kokoro model is not downloaded yet; run: agent-voice prefetch") from None
     return Path(get_model_path(MODEL_REPO))
+
+
+def prefetch(verbose: bool = True) -> Path:
+    """Downloads the model if it is not cached yet, then renders one sentence so
+    that a broken install (spaCy's model, say) fails here, not at the first
+    announcement. The only entry point that uses the network."""
+    path = model_path(download=True)
+    synthesize("Ready.", verbose=verbose)
+    return path
 
 
 @contextlib.contextmanager
