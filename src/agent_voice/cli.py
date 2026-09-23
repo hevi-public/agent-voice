@@ -84,21 +84,29 @@ def _install_skill(args: argparse.Namespace) -> int:
     if args.print:
         print(skill.skill_text(), end="")
         return 0
-    paths = skill.targets(_harnesses(args), project=args.project)
-    results = skill.install(paths, force=args.force)
+    results = skill.install(skill.targets(_harnesses(args), project=args.project), force=args.force)
     for result in results:
-        print(f"{result.status:<10} {result.path}")
+        print(_describe(result))
     print(
         "\nSkills load when the model judges them relevant. To have every session announce,\n"
         "add this line to your always-on instructions (CLAUDE.md, .github/copilot-instructions.md):\n\n"
         f"  {skill.INSTRUCTION}"
     )
-    return 1 if any(r.status.startswith("skipped") for r in results) else 0
+    return 1 if any(r.status == "differs" for r in results) else 0
+
+
+def _describe(result: skill.Result) -> str:
+    target = result.target
+    if result.status == "no-harness":
+        return f"{'skipped':<10} {target.root} (not found)"
+    if result.status == "differs":
+        return f"{'kept':<10} {target.skill_file} (yours differs; use --force)"
+    return f"{result.status:<10} {target.skill_file}"
 
 
 def _uninstall_skill(args: argparse.Namespace) -> int:
     for result in skill.uninstall(skill.targets(_harnesses(args), project=args.project)):
-        print(f"{result.status:<10} {result.path.parent}")
+        print(f"{result.status:<10} {result.target.skill_file.parent}")
     return 0
 
 
@@ -131,8 +139,8 @@ def _doctor(args: argparse.Namespace) -> int:
     for ok, label in checks:
         print(f"{'ok ' if ok else 'NO '} {label}")
     print(f"    muted: {'yes' if speech.is_muted() else 'no'}")
-    installed = [p for p in skill.targets(list(skill.HARNESSES)) if p.exists()]
-    print(f"    skill installed: {', '.join(str(p.parent) for p in installed) or 'nowhere (run: agent-voice install-skill)'}")
+    installed = [t.skill_file.parent for t in skill.targets(list(skill.HARNESSES)) if t.skill_file.exists()]
+    print(f"    skill installed: {', '.join(map(str, installed)) or 'nowhere (run: agent-voice install-skill)'}")
     return 0 if all(ok for ok, _ in checks) else 1
 
 

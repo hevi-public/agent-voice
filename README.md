@@ -38,6 +38,11 @@ Upgrade with `uv tool upgrade agent-voice`. After an upgrade, run
 | `~/.claude/skills/agent-voice/` | Claude Code, VS Code Copilot |
 | `~/.copilot/skills/agent-voice/` | Copilot CLI, VS Code Copilot |
 
+It only writes into agent folders that already exist: without `~/.copilot`,
+say, it skips Copilot rather than create the folder. If neither folder exists,
+it writes nothing and fails. If you use Copilot only in VS Code and have no
+`~/.copilot` yet, create it first (`mkdir ~/.copilot`).
+
 VS Code reads both folders, so it lists the skill twice. Both copies are the
 same file, so that's harmless. To install for one harness only, pass
 `--for claude` or `--for copilot`. `--project DIR` installs into a repo's
