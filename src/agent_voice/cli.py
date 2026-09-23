@@ -165,6 +165,19 @@ def _stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def _hook_log(args: argparse.Namespace) -> int:
+    if args.state == "show":
+        path = hooks.log_path()
+        print(path.read_text(encoding="utf-8") if path.exists() else "(no events logged)", end="")
+        return 0
+    hooks.set_logging(args.state == "on")
+    if args.state == "on":
+        print(f"logging hook event names to {hooks.log_path()}; `agent-voice hook-log off` stops and deletes it")
+    else:
+        print("hook logging off; log deleted")
+    return 0
+
+
 def _mute(args: argparse.Namespace) -> int:
     speech.set_muted(True)
     print("muted — `agent-voice say` stays silent until: agent-voice unmute")
@@ -258,6 +271,10 @@ def main(argv: list[str] | None = None) -> int:
     hook.add_argument("--from", dest="harness", required=True, choices=hooks.HARNESSES)
     hook.add_argument("--event", help="the hook event, for agents whose payload doesn't name it")
     hook.set_defaults(run=_hook)
+
+    hook_log = commands.add_parser("hook-log", help="record which hook events arrive (names only), to diagnose an agent")
+    hook_log.add_argument("state", choices=("on", "off", "show"))
+    hook_log.set_defaults(run=_hook_log)
 
     commands.add_parser("serve", help="run the voice server in the foreground (normally started for you)").set_defaults(run=_serve)
     commands.add_parser("stop", help="stop the voice server, freeing its memory").set_defaults(run=_stop)

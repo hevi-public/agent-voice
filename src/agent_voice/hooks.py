@@ -28,7 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
-import hashlib
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -106,19 +106,31 @@ def _project(cwd: object) -> str:
     return name if re.fullmatch(r"[A-Za-z0-9 ]{1,40}", name) else ""
 
 
+# Tools that ask the user something rather than asking to do something. Claude
+# Code routes its question tool through the same PermissionRequest as a
+# command (observed with 2.1.267), which would otherwise be announced as
+# "approval is needed to use a tool".
+QUESTION_TOOLS = {"AskUserQuestion"}
+
+
 def announcement(harness: str, event: dict) -> str | None:
-    """The sentence for an approval prompt, or None for any other event.
-    Worded to fit any agent: nothing says which one is asking."""
-    if harness == "claude" and event.get("hook_event_name") == "PermissionRequest":
-        tool = event.get("tool_name")
-        what = f" to {_tool_action(tool)}" if isinstance(tool, str) and tool else ""
-    elif harness == "copilot" and event.get("notification_type") == "permission_prompt":
-        what = ""  # Copilot's notification does not say which tool
-    else:
-        return None
+    """The sentence for an approval prompt or a question, or None for any
+    other event. Worded to fit any agent: nothing says which one is asking."""
     project = _project(event.get("cwd"))
     where = f" in {project}" if project else ""
-    return f"Your approval is needed{what}{where}."
+    if harness == "claude" and event.get("hook_event_name") == "PermissionRequest":
+        tool = event.get("tool_name")
+        if tool in QUESTION_TOOLS:
+            return f"A question is waiting for you{where}."
+        what = f" to {_tool_action(tool)}" if isinstance(tool, str) and tool else ""
+        return f"Your approval is needed{what}{where}."
+    if harness == "copilot":
+        kind = event.get("notification_type")
+        if kind == "permission_prompt":
+            return f"Your approval is needed{where}."  # Copilot's notification does not say which tool
+        if kind == "elicitation_dialog":
+            return f"A question is waiting for you{where}."
+    return None
 
 
 # MARK: - stopping an announcement once the agent has moved on
@@ -129,7 +141,9 @@ def announcement(harness: str, event: dict) -> str | None:
 # queued or playing. Claude Code names the tool in both PermissionRequest and
 # PostToolUse, so there the stop is for that exact call (a parallel tool
 # finishing does not silence another's prompt); Copilot's notification names
-# no tool, so there it is per session.
+# no tool, so there it is per session. The Claude match is on the tool's name,
+# not its input: the input can grow between the two events (AskUserQuestion's
+# comes back with the answers added).
 
 CANCEL_EVENTS = {
     "claude": {"PostToolUse": "tool", "PostToolUseFailure": "tool", "UserPromptSubmit": "session", "Stop": "session"},
@@ -145,8 +159,8 @@ def _session(event: dict) -> str | None:
 
 
 def _tool_key(event: dict) -> str:
-    call = json.dumps([event.get("tool_name"), event.get("tool_input")], sort_keys=True, default=str)
-    return hashlib.sha1(call.encode()).hexdigest()[:12]
+    tool = event.get("tool_name")
+    return tool if isinstance(tool, str) and _ID.fullmatch(tool) else "tool"
 
 
 def _speak_in_background(text: str, tag: str | None) -> None:
@@ -166,6 +180,46 @@ def _speak_in_background(text: str, tag: str | None) -> None:
     )
 
 
+# MARK: - diagnostics
+#
+# `agent-voice hook-log on` records which events reach the hook, so an agent's
+# undocumented behaviour (which event fires when Copilot asks a question, say)
+# can be seen rather than guessed. Names only — never the tool's input or any
+# message, which can hold anything.
+
+
+def _log_flag() -> Path:
+    return speech.state_dir() / "hook-log-on"
+
+
+def log_path() -> Path:
+    return speech.state_dir() / "hooks.log"
+
+
+def set_logging(on: bool) -> None:
+    if on:
+        _log_flag().parent.mkdir(parents=True, exist_ok=True)
+        _log_flag().touch()
+    else:
+        _log_flag().unlink(missing_ok=True)
+        log_path().unlink(missing_ok=True)
+
+
+def _log(harness: str, name: object, event: dict) -> None:
+    if not _log_flag().exists():
+        return
+    fields = {
+        "time": time.strftime("%H:%M:%S"),
+        "from": harness,
+        "event": name,
+        "tool": event.get("tool_name") or event.get("toolName"),
+        "notification_type": event.get("notification_type"),
+        "keys": sorted(event),
+    }
+    with open(log_path(), "a", encoding="utf-8") as log:
+        log.write(json.dumps(fields) + "\n")
+
+
 def handle(harness: str, raw: str, event_name: str | None = None) -> str | None:
     """Acts on one hook payload: announces an approval prompt in the
     background, or stops the announcement once the agent has moved on.
@@ -180,6 +234,7 @@ def handle(harness: str, raw: str, event_name: str | None = None) -> str | None:
     if not isinstance(event, dict):
         return None
     name = event_name or event.get("hook_event_name")
+    _log(harness, name, event)
     session = _session(event)
     scope = CANCEL_EVENTS.get(harness, {}).get(name)
     if scope is not None:

@@ -296,13 +296,54 @@ def test_claude_announcement_is_queued_tagged_with_its_tool_call(voice_server, s
     assert spawned == []  # the server took it
 
 
-def test_the_approved_tool_finishing_cancels_exactly_its_announcement(voice_server):
+def test_the_approved_tool_finishing_cancels_its_announcement(voice_server):
     hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
     hooks.handle("claude", claude_event("PostToolUse", tool_response={"stdout": ""}))
-    hooks.handle("claude", claude_event("PostToolUse", tool_input={"command": "ls"}))
+    hooks.handle("claude", claude_event("PostToolUse", tool_name="Read"))
     tag = voice_server[0][2]["tag"]
+    assert tag == "ce3b6ff5-4889:Bash"
     assert voice_server[1] == ("cancel", tag)
-    assert voice_server[2][0] == "cancel" and voice_server[2][1] != tag  # another call: another tag
+    assert voice_server[2] == ("cancel", "ce3b6ff5-4889:Read")  # a different tool finishing leaves it alone
+
+
+# Trimmed from a real Claude Code 2.1.267 session: the question tool goes
+# through PermissionRequest, and PostToolUse returns its input with answers added.
+QUESTION = {**CLAUDE_REQUEST, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Tea or coffee?"}]}}
+
+
+def test_a_question_is_announced_as_a_question(voice_server):
+    assert hooks.handle("claude", json.dumps(QUESTION)) == "A question is waiting for you in speech test."
+
+
+def test_answering_a_question_cancels_it_although_its_input_grew(voice_server):
+    hooks.handle("claude", json.dumps(QUESTION))
+    answered = {**QUESTION, "hook_event_name": "PostToolUse",
+                "tool_input": {**QUESTION["tool_input"], "answers": {"Tea or coffee?": "Tea"}, "annotations": {}}}
+    hooks.handle("claude", json.dumps(answered))
+    assert voice_server[1] == ("cancel", voice_server[0][2]["tag"])
+
+
+def test_copilot_elicitation_is_announced_as_a_question():
+    event = {"cwd": "/w/billing-api", "notification_type": "elicitation_dialog"}
+    assert hooks.announcement("copilot", event) == "A question is waiting for you in billing api."
+
+
+def test_hook_log_records_names_but_never_contents(voice_server):
+    hooks.set_logging(True)
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("copilot", json.dumps({"sessionId": "s1", "toolName": "ask_user", "toolArgs": {"q": "secret"}}), "postToolUse")
+    log = hooks.log_path().read_text()
+    entries = [json.loads(line) for line in log.splitlines()]
+    assert [(e["from"], e["event"], e["tool"]) for e in entries] == [
+        ("claude", "PermissionRequest", "Bash"),
+        ("copilot", "postToolUse", "ask_user"),
+    ]
+    for leaked in ("rm -rf", "push", "secret"):
+        assert leaked not in log
+    hooks.set_logging(False)
+    assert not hooks.log_path().exists()
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    assert not hooks.log_path().exists()
 
 
 @pytest.mark.parametrize("name", ["UserPromptSubmit", "Stop"])
