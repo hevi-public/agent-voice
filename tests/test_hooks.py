@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from agent_voice import cli, hooks
+from agent_voice import cli, hooks, speech
 
 PROGRAM = "/Users/me/.local/bin/agent-voice"
 
@@ -136,20 +136,20 @@ def test_outside_git_the_folder_itself_is_used(tmp_path):
 
 
 def test_hook_speaks_at_once_in_a_detached_process(spawned):
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST), speak=True)
     [(argv, kwargs)] = spawned
     assert argv[-3:] == ["say", "--", "Your approval is needed to run a shell command in speech test."]
     assert kwargs["start_new_session"] is True
 
 
 def test_nothing_the_model_wrote_is_spoken(spawned):
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST), speak=True)
     for leaked in ("rm", "push", "force", "yeah", "Claude"):
         assert leaked not in said(spawned)[0]
 
 
 def test_the_hook_leaves_no_files(spawned, tmp_path):
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST), speak=True)
     assert not (tmp_path / "state").exists()
 
 
@@ -191,12 +191,12 @@ def test_claude_hook_merges_into_existing_settings(tmp_path):
     }
     settings.write_text(json.dumps(existing))
 
-    [result, _] = hooks.install(["claude", "copilot"], home=home, program=PROGRAM)
+    [result, _] = hooks.install(["claude", "copilot"], home=home, program=PROGRAM, speak=True)
     assert result.status == "installed"
     data = json.loads(settings.read_text())
     assert data["model"] == "opus" and data["permissions"] == existing["permissions"]
     def ours(event):
-        return {"hooks": [{"type": "command", "command": f"{PROGRAM} hook --from claude --event {event}", "async": True, "timeout": 10}]}
+        return {"hooks": [{"type": "command", "command": f"{PROGRAM} hook --from claude --event {event} --speak", "async": True, "timeout": 10}]}
 
     assert data["hooks"]["PermissionRequest"] == [existing["hooks"]["PermissionRequest"][0], ours("PermissionRequest")]
     assert data["hooks"]["Stop"] == [existing["hooks"]["Stop"][0], ours("Stop")]
@@ -205,8 +205,8 @@ def test_claude_hook_merges_into_existing_settings(tmp_path):
     assert "Notification" not in data["hooks"]
     assert json.loads((home / ".claude/settings.json.agent-voice-backup").read_text()) == existing
 
-    assert hooks.install(["claude"], home=home, program=PROGRAM)[0].status == "unchanged"
-    assert hooks.install(["claude"], home=home, program="/elsewhere/agent-voice")[0].status == "updated"
+    assert hooks.install(["claude"], home=home, program=PROGRAM, speak=True)[0].status == "unchanged"
+    assert hooks.install(["claude"], home=home, program="/elsewhere/agent-voice", speak=True)[0].status == "updated"
     after_update = json.loads(settings.read_text())["hooks"]
     assert len(after_update["PermissionRequest"]) == 2
 
@@ -225,9 +225,9 @@ def test_reinstalling_replaces_what_older_versions_added(tmp_path):
     }}))
     assert hooks.install(["claude"], home=home, program=PROGRAM)[0].status == "updated"
     data = json.loads((home / ".claude/settings.json").read_text())["hooks"]
-    assert data["Notification"] == [theirs]
-    assert set(data) == {"Notification", *hooks.CLAUDE_EVENTS}
-    assert data["PermissionRequest"][0]["hooks"][0]["command"].endswith("--event PermissionRequest")
+    assert data == {"Notification": [theirs], "PermissionRequest": [{"hooks": [
+        {"type": "command", "command": f"{PROGRAM} hook --from claude --event PermissionRequest", "async": True, "timeout": 10}
+    ]}]}
 
 
 def test_claude_hook_into_a_fresh_settings_file(tmp_path):
@@ -252,9 +252,13 @@ def test_copilot_hook_gets_its_own_file(tmp_path):
     [_, result] = hooks.install(["claude", "copilot"], home=home, program=PROGRAM)
     assert result.status == "installed"
     data = json.loads((home / ".copilot/hooks/agent-voice.json").read_text())
-    assert data["version"] == 1
+    assert data == {"version": 1, "hooks": {
+        "notification": [{"type": "command", "bash": f"{PROGRAM} hook --from copilot --event notification", "timeoutSec": 10}]
+    }}
+    hooks.install(["copilot"], home=home, program=PROGRAM, speak=True)
+    data = json.loads((home / ".copilot/hooks/agent-voice.json").read_text())
     assert data["hooks"] == {
-        event: [{"type": "command", "bash": f"{PROGRAM} hook --from copilot --event {event}", "timeoutSec": 10}]
+        event: [{"type": "command", "bash": f"{PROGRAM} hook --from copilot --event {event} --speak", "timeoutSec": 10}]
         for event in ("notification", "postToolUse", "postToolUseFailure", "userPromptSubmitted", "agentStop")
     }
     assert not (home / ".claude").exists()
@@ -289,7 +293,7 @@ def claude_event(name, **fields):
 
 
 def test_claude_announcement_is_queued_tagged_with_its_tool_call(voice_server, spawned):
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST), speak=True)
     [(op, text, kw)] = voice_server
     assert op == "speak" and kw["wait"] is False
     assert kw["tag"].startswith("ce3b6ff5-4889:") and len(kw["tag"]) > len("ce3b6ff5-4889:")
@@ -297,9 +301,9 @@ def test_claude_announcement_is_queued_tagged_with_its_tool_call(voice_server, s
 
 
 def test_the_approved_tool_finishing_cancels_its_announcement(voice_server):
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
-    hooks.handle("claude", claude_event("PostToolUse", tool_response={"stdout": ""}))
-    hooks.handle("claude", claude_event("PostToolUse", tool_name="Read"))
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST), speak=True)
+    hooks.handle("claude", claude_event("PostToolUse", tool_response={"stdout": ""}), speak=True)
+    hooks.handle("claude", claude_event("PostToolUse", tool_name="Read"), speak=True)
     tag = voice_server[0][2]["tag"]
     assert tag == "ce3b6ff5-4889:Bash"
     assert voice_server[1] == ("cancel", tag)
@@ -312,14 +316,14 @@ QUESTION = {**CLAUDE_REQUEST, "tool_name": "AskUserQuestion", "tool_input": {"qu
 
 
 def test_a_question_is_announced_as_a_question(voice_server):
-    assert hooks.handle("claude", json.dumps(QUESTION)) == "A question is waiting for you in speech test."
+    assert hooks.handle("claude", json.dumps(QUESTION), speak=True) == "A question is waiting for you in speech test."
 
 
 def test_answering_a_question_cancels_it_although_its_input_grew(voice_server):
-    hooks.handle("claude", json.dumps(QUESTION))
+    hooks.handle("claude", json.dumps(QUESTION), speak=True)
     answered = {**QUESTION, "hook_event_name": "PostToolUse",
                 "tool_input": {**QUESTION["tool_input"], "answers": {"Tea or coffee?": "Tea"}, "annotations": {}}}
-    hooks.handle("claude", json.dumps(answered))
+    hooks.handle("claude", json.dumps(answered), speak=True)
     assert voice_server[1] == ("cancel", voice_server[0][2]["tag"])
 
 
@@ -359,13 +363,13 @@ def test_copilot_cancels_by_session_using_the_installed_event_name(voice_server,
 
 
 def test_copilot_announcement_is_tagged_with_its_session(voice_server):
-    hooks.handle("copilot", json.dumps({"sessionId": "s1", "cwd": "/w/app", "notification_type": "permission_prompt"}), "notification")
+    hooks.handle("copilot", json.dumps({"sessionId": "s1", "cwd": "/w/app", "notification_type": "permission_prompt"}), "notification", speak=True)
     assert voice_server[0][2]["tag"] == "s1"
 
 
 def test_without_a_server_it_speaks_from_a_detached_process(monkeypatch, spawned):
     monkeypatch.setattr(hooks.server, "speak", lambda text, **kw: None)
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST), speak=True)
     [(argv, kwargs)] = spawned
     assert argv[-2:] == ["--", "Your approval is needed to run a shell command in speech test."]
     assert kwargs["env"]["AGENT_VOICE_SERVER"] == "0"
@@ -373,5 +377,50 @@ def test_without_a_server_it_speaks_from_a_detached_process(monkeypatch, spawned
 
 def test_muted_means_nothing_is_queued(voice_server, monkeypatch):
     monkeypatch.setenv("AGENT_VOICE_MUTE", "1")
-    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST), speak=True)
     assert voice_server == []
+
+
+# MARK: - the chime (the default)
+
+
+def test_an_approval_chimes_by_default(spawned, voice_server):
+    assert hooks.handle("claude", json.dumps(CLAUDE_REQUEST)) == "approval"
+    [(argv, kwargs)] = spawned
+    assert argv == [speech.AFPLAY, hooks.CHIMES["approval"]]
+    assert kwargs["start_new_session"] is True
+    assert voice_server == []  # no words, no voice server
+
+
+def test_a_question_has_its_own_chime(spawned, voice_server):
+    assert hooks.handle("claude", json.dumps(QUESTION)) == "question"
+    assert spawned[0][0][-1] == hooks.CHIMES["question"]
+    event = {"sessionId": "s1", "notification_type": "elicitation_dialog"}
+    assert hooks.handle("copilot", json.dumps(event), "notification") == "question"
+
+
+def test_the_chimes_exist():
+    import os
+
+    for sound in hooks.CHIMES.values():
+        assert os.path.exists(sound), sound
+
+
+def test_muted_means_no_chime(spawned, monkeypatch):
+    monkeypatch.setenv("AGENT_VOICE_MUTE", "1")
+    hooks.handle("claude", json.dumps(CLAUDE_REQUEST))
+    assert spawned == []
+
+
+def test_by_default_only_the_prompt_events_are_hooked(tmp_path):
+    home = home_with(tmp_path, ".claude")
+    hooks.install(["claude"], home=home, program=PROGRAM)
+    assert list(json.loads((home / ".claude/settings.json").read_text())["hooks"]) == ["PermissionRequest"]
+
+
+def test_switching_back_from_speak_to_chime_removes_the_stop_hooks(tmp_path):
+    home = home_with(tmp_path, ".claude")
+    hooks.install(["claude"], home=home, program=PROGRAM, speak=True)
+    assert hooks.install(["claude"], home=home, program=PROGRAM)[0].status == "updated"
+    assert list(json.loads((home / ".claude/settings.json").read_text())["hooks"]) == ["PermissionRequest"]
+

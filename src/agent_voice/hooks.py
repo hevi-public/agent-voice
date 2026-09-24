@@ -113,24 +113,51 @@ def _project(cwd: object) -> str:
 QUESTION_TOOLS = {"AskUserQuestion"}
 
 
+def prompt_kind(harness: str, event: dict) -> str | None:
+    """"approval" or "question" when the event means the agent is waiting on
+    the user; None for any other event."""
+    if harness == "claude" and event.get("hook_event_name") == "PermissionRequest":
+        return "question" if event.get("tool_name") in QUESTION_TOOLS else "approval"
+    if harness == "copilot":
+        return {"permission_prompt": "approval", "elicitation_dialog": "question"}.get(event.get("notification_type"))
+    return None
+
+
 def announcement(harness: str, event: dict) -> str | None:
     """The sentence for an approval prompt or a question, or None for any
     other event. Worded to fit any agent: nothing says which one is asking."""
+    kind = prompt_kind(harness, event)
+    if kind is None:
+        return None
     project = _project(event.get("cwd"))
     where = f" in {project}" if project else ""
-    if harness == "claude" and event.get("hook_event_name") == "PermissionRequest":
-        tool = event.get("tool_name")
-        if tool in QUESTION_TOOLS:
-            return f"A question is waiting for you{where}."
-        what = f" to {_tool_action(tool)}" if isinstance(tool, str) and tool else ""
-        return f"Your approval is needed{what}{where}."
-    if harness == "copilot":
-        kind = event.get("notification_type")
-        if kind == "permission_prompt":
-            return f"Your approval is needed{where}."  # Copilot's notification does not say which tool
-        if kind == "elicitation_dialog":
-            return f"A question is waiting for you{where}."
-    return None
+    if kind == "question":
+        return f"A question is waiting for you{where}."
+    tool = event.get("tool_name")  # Copilot's notification names none
+    what = f" to {_tool_action(tool)}" if isinstance(tool, str) and tool else ""
+    return f"Your approval is needed{what}{where}."
+
+
+# The default: a chime, not words. The user has to come to the keyboard to
+# answer either way, so a sound says enough and interrupts less. Two sounds, so
+# an approval and a question can be told apart. `install-hooks --speak` switches
+# to the spoken sentences above.
+CHIMES = {
+    "approval": "/System/Library/Sounds/Glass.aiff",
+    "question": "/System/Library/Sounds/Ping.aiff",
+}
+
+
+def _chime(kind: str) -> None:
+    if speech.is_muted():
+        return
+    subprocess.Popen(
+        [speech.AFPLAY, CHIMES[kind]],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 # MARK: - stopping an announcement once the agent has moved on
@@ -220,12 +247,14 @@ def _log(harness: str, name: object, event: dict) -> None:
         log.write(json.dumps(fields) + "\n")
 
 
-def handle(harness: str, raw: str, event_name: str | None = None) -> str | None:
-    """Acts on one hook payload: announces an approval prompt in the
-    background, or stops the announcement once the agent has moved on.
+def handle(harness: str, raw: str, event_name: str | None = None, speak: bool = False) -> str | None:
+    """Acts on one hook payload: chimes (or, with `speak`, announces) an
+    approval prompt or a question in the background, or stops a spoken
+    announcement once the agent has moved on.
 
     Never raises, never prints: a hook's stdout is read by the agent as a
-    decision, and this one only observes. Returns what it said, for tests.
+    decision, and this one only observes. Returns the chime's kind or the
+    sentence spoken, for tests.
     """
     try:
         event = json.loads(raw)
@@ -241,9 +270,13 @@ def handle(harness: str, raw: str, event_name: str | None = None) -> str | None:
         if session is not None:
             server.cancel(f"{session}:{_tool_key(event)}" if scope == "tool" else session)
         return None
-    text = announcement(harness, event)
-    if text is None:
+    kind = prompt_kind(harness, event)
+    if kind is None:
         return None
+    if not speak:
+        _chime(kind)
+        return kind
+    text = announcement(harness, event)
     tag = None
     if session is not None:
         tag = f"{session}:{_tool_key(event)}" if harness == "claude" else session
@@ -272,9 +305,11 @@ def executable() -> str:
     return str(Path(found).absolute()) if found else str(Path(sys.argv[0]).absolute())
 
 
-def hook_command(harness: str, program: str | None = None, event: str | None = None) -> str:
+def hook_command(harness: str, program: str | None = None, event: str | None = None, speak: bool = False) -> str:
     command = f"{_quote(program or executable())} hook --from {harness}"
-    return f"{command} --event {event}" if event else command
+    if event:
+        command += f" --event {event}"
+    return command + " --speak" if speak else command
 
 
 def _quote(path: str) -> str:
@@ -312,9 +347,15 @@ def _read_settings(path: Path) -> dict:
     return data
 
 
-# Claude Code events our handler is installed under: the prompt, then the
-# events that mean it is over.
+# Claude Code events our handler is installed under: the prompt, then — only
+# when it is spoken, since a chime is over in a second — the events that mean
+# it is over.
 CLAUDE_EVENTS = ("PermissionRequest", *CANCEL_EVENTS["claude"])
+
+
+def _events(harness: str, speak: bool) -> tuple[str, ...]:
+    everything = CLAUDE_EVENTS if harness == "claude" else COPILOT_EVENTS
+    return everything if speak else everything[:1]
 # Every event an agent-voice version ever installed under, so an install or an
 # uninstall also clears what an older version left (0.1.0 briefly used the
 # delayed Notification too).
@@ -337,14 +378,14 @@ def _our_claude_handlers(data: dict) -> list[dict]:
     ]
 
 
-def _install_claude(settings: Path, program: str | None) -> str:
+def _install_claude(settings: Path, program: str | None, speak: bool) -> str:
     """Adds our hooks to Claude Code's settings, keeping everything else."""
     data = _read_settings(settings)
     had_ours = bool(_our_claude_handlers(data))
     wanted = copy.deepcopy(data)
     _remove_claude_hooks(wanted)
-    for event in CLAUDE_EVENTS:
-        handler = {"type": "command", "command": hook_command("claude", program, event), "async": True, "timeout": 10}
+    for event in _events("claude", speak):
+        handler = {"type": "command", "command": hook_command("claude", program, event, speak), "async": True, "timeout": 10}
         wanted.setdefault("hooks", {}).setdefault(event, []).append({"hooks": [handler]})
     if wanted == data:
         return "unchanged"
@@ -384,19 +425,23 @@ def _remove_claude_hooks(data: dict) -> bool:
     return True
 
 
-def _copilot_file(program: str | None) -> dict:
+def _copilot_file(program: str | None, speak: bool) -> dict:
     return {
         "version": 1,
         "hooks": {
-            event: [{"type": "command", "bash": hook_command("copilot", program, event), "timeoutSec": 10}]
-            for event in COPILOT_EVENTS
+            event: [{"type": "command", "bash": hook_command("copilot", program, event, speak), "timeoutSec": 10}]
+            for event in _events("copilot", speak)
         },
     }
 
 
-def install(harnesses: list[str], home: Path | None = None, program: str | None = None) -> list[Result]:
-    """Installs the approval hook for each harness whose folder exists; the
-    same rule as the skill: never create an agent's folder, and fail when none exists."""
+def install(
+    harnesses: list[str], home: Path | None = None, program: str | None = None, speak: bool = False
+) -> list[Result]:
+    """Installs the approval hooks for each harness whose folder exists; the
+    same rule as the skill: never create an agent's folder, and fail when none
+    exists. `speak` installs spoken announcements, and the hooks that stop them,
+    instead of a chime."""
     paths = _paths(home or Path.home())
     present = [h for h in harnesses if paths[h][0].is_dir()]
     if not present:
@@ -409,9 +454,9 @@ def install(harnesses: list[str], home: Path | None = None, program: str | None 
             results.append(Result(harness, root, "no-harness"))
             continue
         if harness == "claude":
-            status = _install_claude(path, program)
+            status = _install_claude(path, program, speak)
         else:
-            wanted = _copilot_file(program)
+            wanted = _copilot_file(program, speak)
             current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
             status = "unchanged" if current == wanted else ("updated" if current else "installed")
             if status != "unchanged":

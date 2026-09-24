@@ -19,7 +19,7 @@ never breaks because of it.
 uv tool install git+https://github.com/hevi-public/agent-voice
 agent-voice prefetch        # one-time model download (~340 MB) and a test sentence
 agent-voice install-skill   # teach Claude Code and Copilot to use it
-agent-voice install-hooks   # announce tool-approval prompts (optional)
+agent-voice install-hooks   # chime when an agent needs your approval or answer (optional)
 agent-voice say "Hello from agent-voice."
 ```
 
@@ -42,7 +42,7 @@ edits (**back it up first**) or a file that belongs to agent-voice alone.
 
 | Path | Written by | What happens |
 |---|---|---|
-| `~/.claude/settings.json` | `install-hooks`, `uninstall-hooks` | **Edited: back it up first.** Five hook entries are added (or removed): `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit` and `Stop`. Your other settings and hooks are kept. The file is rewritten with 2-space indentation, so its formatting may change. On the first edit a copy is saved next to it as `settings.json.agent-voice-backup` (left in place by `uninstall-hooks`; delete it when you no longer need it), but don't rely on that as your only backup. If the file isn't valid JSON, agent-voice stops and changes nothing. |
+| `~/.claude/settings.json` | `install-hooks`, `uninstall-hooks` | **Edited: back it up first.** One `PermissionRequest` hook entry is added (or removed); with `--speak`, also `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit` and `Stop`. Your other settings and hooks are kept. The file is rewritten with 2-space indentation, so its formatting may change. On the first edit a copy is saved next to it as `settings.json.agent-voice-backup` (left in place by `uninstall-hooks`; delete it when you no longer need it), but don't rely on that as your only backup. If the file isn't valid JSON, agent-voice stops and changes nothing. |
 | `~/.copilot/hooks/agent-voice.json` | `install-hooks`, `uninstall-hooks` | agent-voice's own file, created and deleted whole. |
 | `~/.claude/skills/agent-voice/SKILL.md`, `~/.copilot/skills/agent-voice/SKILL.md` | `install-skill`, `uninstall-skill` | agent-voice's own folders. A `SKILL.md` you've edited is kept unless you pass `--force`. |
 | `<repo>/.claude/skills/agent-voice/`, `<repo>/.github/skills/agent-voice/` | `install-skill --project <repo>` | Same, inside that repo, where they'd be committed with it. |
@@ -140,48 +140,57 @@ agents still take turns.
 The Python library (`from agent_voice import say`) doesn't use the server; it
 keeps Kokoro loaded in your own process instead.
 
-## Approval announcements
+## Approval and question alerts
 
-`agent-voice install-hooks` makes agents say when a tool call is waiting for
-your approval: *"Your approval is needed to run a shell command in billing
-api."* When the agent asks you something through its question tool, it says
-*"A question is waiting for you in billing api."* instead. It uses the agents'
-own hooks:
+`agent-voice install-hooks` makes a sound when an agent is waiting for you:
+**Glass** when a tool call needs your approval, **Ping** when the agent asks
+you a question through its question tool. You have to come to the keyboard to
+answer either way, so a chime says enough and interrupts less than words.
 
 | Agent | Hook | Written to |
 |---|---|---|
-| Claude Code | `PermissionRequest` (the dialog opens) speaks; `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit` and `Stop` stop it | entries merged into `~/.claude/settings.json` |
-| Copilot CLI | `notification` (`permission_prompt`, or `elicitation_dialog` for a question) speaks; `postToolUse`, `postToolUseFailure`, `userPromptSubmitted` and `agentStop` stop it | its own file, `~/.copilot/hooks/agent-voice.json` |
+| Claude Code | `PermissionRequest`, which fires as the dialog opens (its question tool goes through it too) | one entry merged into `~/.claude/settings.json` |
+| Copilot CLI | `notification`: `permission_prompt` for an approval, `elicitation_dialog` for a question | its own file, `~/.copilot/hooks/agent-voice.json` |
 | Copilot in VS Code | none | VS Code has no approval event, so it can't be announced |
 
-The announcement is a summons, not a read-out. It names the kind of tool (from
-the agent's own tool names; Copilot's notification doesn't carry one, so there
-it's just *"Your approval is needed in billing api."*) and the project: the
-repository's name, even from a subfolder or a git worktree, or the folder's
-name outside git. It never says the command or anything else the model wrote:
-you approve on screen, where the whole command is, and reading part of it
-aloud could make the rest sound safe. The hook returns immediately and speaks
-in the background, so the agent never waits for the voice, and it keeps no
-state between prompts.
+The hook returns at once and plays in the background, so the agent never
+waits, and it keeps no state between prompts. It follows the same folder rule
+as `install-skill`, and `agent-voice uninstall-hooks` removes exactly what it
+added. Mute silences the chimes too.
 
-**Approve quickly and it stops talking.** Neither agent reports that a prompt
-was answered, so agent-voice watches for the next thing that happens instead:
-the approved tool finishing, you typing, or the turn ending. Any of those
-stops that prompt's announcement, whether it's still waiting or already
-playing. In Claude Code the stop is for that exact tool call; Copilot's
-notification doesn't say which tool it's about, so there it's for the whole
-session. It can't help with a long-running command you approved (a test
-suite, say): nothing signals until it finishes, so the announcement plays.
-The stop hooks run after every tool call and take a few hundredths of a
-second.
+### Spoken instead: `install-hooks --speak`
 
-**Diagnosing an agent.** Copilot's docs don't say which event fires when it
-asks you a question, so its question announcement is a best guess. To see what
-an agent actually sends, run `agent-voice hook-log on`, use the agent, then
-`agent-voice hook-log show`. It records event and tool names only, never a
-command, a question or any other content. `agent-voice hook-log off` stops it
-and deletes the log. It follows the same folder rule as `install-skill`.
-`agent-voice uninstall-hooks` removes exactly what it added.
+With `--speak`, the alert is a sentence instead of a chime: *"Your approval is
+needed to run a shell command in billing api."* or *"A question is waiting for
+you in billing api."* It names the kind of tool (from the agent's own tool
+names; Copilot's notification doesn't carry one, so there it's just *"Your
+approval is needed in billing api."*) and the project: the repository's name,
+even from a subfolder or a git worktree, or the folder's name outside git. It
+never says the command or anything else the model wrote: you approve on
+screen, where the whole command is, and reading part of it aloud could make
+the rest sound safe.
+
+A sentence takes a few seconds, so `--speak` also installs hooks that stop it
+once you've answered. Neither agent reports that a prompt was answered, so
+agent-voice watches for the next thing that happens instead: the tool
+finishing, you typing, or the turn ending (Claude Code: `PostToolUse`,
+`PostToolUseFailure`, `UserPromptSubmit`, `Stop`; Copilot: `postToolUse`,
+`postToolUseFailure`, `userPromptSubmitted`, `agentStop`). In Claude Code the
+stop is for that tool; Copilot's notification doesn't say which tool it's
+about, so there it's for the whole session. It can't help with a long-running
+command you approved (a test suite, say): nothing signals until it finishes.
+The stop hooks run after every tool call and take a few hundredths of a second.
+
+Run `install-hooks` again, with or without `--speak`, to switch; it replaces
+the old entries.
+
+### Diagnosing an agent
+
+Copilot's docs don't say which event fires when it asks you a question, so
+its question alert is a best guess. To see what an agent actually sends, run
+`agent-voice hook-log on`, use the agent, then `agent-voice hook-log show`. It
+records event and tool names only, never a command, a question or any other
+content. `agent-voice hook-log off` stops it and deletes the log.
 
 ## Commands
 
@@ -198,7 +207,7 @@ agent-voice voices                       list the English voices
 agent-voice uninstall-skill              remove the skill again
 agent-voice stop                         stop the voice server now (it restarts on the next say)
 agent-voice hook-log on | show | off     record which hook events arrive (names only)
-agent-voice install-hooks | uninstall-hooks  announce approval prompts, or stop
+agent-voice install-hooks [--speak] | uninstall-hooks  chime (or speak) when an agent waits for you, or stop
 ```
 
 Environment variables: `AGENT_VOICE_VOICE` (default `af_heart`),

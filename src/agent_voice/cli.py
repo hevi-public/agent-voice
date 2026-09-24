@@ -134,14 +134,14 @@ def _hook(args: argparse.Namespace) -> int:
     # Always 0 and silent on stdout: the agent reads a hook's exit code and
     # output as a verdict on the tool call, and this hook only observes.
     try:
-        hooks.handle(args.harness, sys.stdin.read(), args.event)
+        hooks.handle(args.harness, sys.stdin.read(), args.event, speak=args.speak)
     except Exception:
         pass
     return 0
 
 
 def _install_hooks(args: argparse.Namespace) -> int:
-    for result in hooks.install(args.harness or list(hooks.HARNESSES)):
+    for result in hooks.install(args.harness or list(hooks.HARNESSES), speak=args.speak):
         if result.status == "no-harness":
             print(f"{'skipped':<10} {result.path} (not found)")
         else:
@@ -265,11 +265,17 @@ def main(argv: list[str] | None = None) -> int:
             "--for", dest="harness", action="append", choices=hooks.HARNESSES,
             help="only this harness (repeatable; default: all)",
         )
+        if name == "install-hooks":
+            command.add_argument(
+                "--speak", action="store_true",
+                help="say what's waiting (\"Your approval is needed to run a shell command in ...\") instead of chiming",
+            )
         command.set_defaults(run=run)
 
     hook = commands.add_parser("hook", help="entry point the installed hooks call; reads the event on stdin")
     hook.add_argument("--from", dest="harness", required=True, choices=hooks.HARNESSES)
     hook.add_argument("--event", help="the hook event, for agents whose payload doesn't name it")
+    hook.add_argument("--speak", action="store_true", help="speak the prompt instead of chiming")
     hook.set_defaults(run=_hook)
 
     hook_log = commands.add_parser("hook-log", help="record which hook events arrive (names only), to diagnose an agent")
