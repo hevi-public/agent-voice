@@ -46,7 +46,7 @@ LENSES = [
 # ---------------------------------------------------------------- outside world
 
 EXTERNALS = [
-    # id, label, sub, side, summary, detail, tags
+    # id, label, sub, side, summary, detail, tags — ROLES below says, in plain words, what each does for agent-voice
     ("ext.user", "You", "terminal", "left",
      "Runs agent-voice commands and hears the result.",
      "Installs with uv, runs install-skill / install-hooks, mutes for meetings, reads `doctor`. Approves and answers agent prompts at the keyboard — which is why alerts are chimes by default.",
@@ -96,6 +96,19 @@ EXTERNALS = [
      "Used for the temp WAV that afplay plays and for `say --out`.",
      ["files"]),
 ]
+
+ROLES = {'ext.user': 'installs it, runs its commands, hears it',
+    'ext.claude': 'reads the skill, speaks, sends hook events',
+    'ext.copilot': 'reads the skill, speaks, sends hook events',
+    'ext.vscode': 'reads the skill; no hooks',
+    'ext.install': 'installs the agent-voice command',
+    'ext.audio': 'plays the speech and the chimes',
+    'ext.state': 'locks, the server socket, mute flag',
+    'ext.config': 'skills, hook entries, settings.json',
+    'ext.hf': 'the model download (prefetch only)',
+    'ext.mlx': 'turns text into speech',
+    'ext.g2p': 'works out how words are pronounced',
+    'ext.sf': 'writes the WAV file'}
 
 # ---------------------------------------------------------------- modules
 
@@ -477,7 +490,7 @@ def main():
         sys.exit(f"annotations out of date — missing: {missing}  stale: {stale}")
     nodes = []
     for eid, label, sub, side, summary, detail, tags in EXTERNALS:
-        nodes.append({"id": eid, "kind": "external", "label": label, "sub": sub, "side": side,
+        nodes.append({"id": eid, "kind": "external", "label": label, "sub": sub, "side": side, "role": ROLES[eid],
                       "summary": summary, "detail": detail, "tags": tags})
     coverage = json.loads(COVERAGE.read_text())["files"] if COVERAGE.exists() else {}
     for mid, file, label, summary, detail, tags in MODULES:

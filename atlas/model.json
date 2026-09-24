@@ -1,6 +1,6 @@
 {
  "repo": "https://github.com/hevi-public/agent-voice",
- "commit": "fffd80d",
+ "commit": "ca1c43e",
  "lenses": [
   {
    "id": "security",
@@ -55,6 +55,7 @@
    "label": "You",
    "sub": "terminal",
    "side": "left",
+   "role": "installs it, runs its commands, hears it",
    "summary": "Runs agent-voice commands and hears the result.",
    "detail": "Installs with uv, runs install-skill / install-hooks, mutes for meetings, reads `doctor`. Approves and answers agent prompts at the keyboard \u2014 which is why alerts are chimes by default.",
    "tags": [
@@ -67,6 +68,7 @@
    "label": "Claude Code",
    "sub": "agent",
    "side": "left",
+   "role": "reads the skill, speaks, sends hook events",
    "summary": "Loads the skill, runs `agent-voice say`, fires hooks.",
    "detail": "Reads SKILL.md from ~/.claude/skills and calls `agent-voice say` through its Bash tool. Its PermissionRequest hook fires when an approval dialog opens \u2014 its question tool (AskUserQuestion) goes through it too. With --speak, PostToolUse, PostToolUseFailure, UserPromptSubmit and Stop fire the cancels. Hooks get the event as JSON on stdin and treat stdout as a verdict.",
    "tags": [
@@ -79,6 +81,7 @@
    "label": "Copilot CLI",
    "sub": "agent",
    "side": "left",
+   "role": "reads the skill, speaks, sends hook events",
    "summary": "Loads the skill, runs `agent-voice say`, fires notification hooks.",
    "detail": "Reads SKILL.md from ~/.copilot/skills. Its `notification` hook carries notification_type permission_prompt (approval) or elicitation_dialog (assumed to be a question \u2014 undocumented, unconfirmed). Its payloads don't name their event, so installed commands pass --event.",
    "tags": [
@@ -91,6 +94,7 @@
    "label": "Copilot in VS Code",
    "sub": "agent",
    "side": "left",
+   "role": "reads the skill; no hooks",
    "summary": "Loads the skill only.",
    "detail": "Reads ~/.claude/skills and ~/.copilot/skills (so it lists the skill twice). Has no approval event, so gets no hooks.",
    "tags": [
@@ -103,6 +107,7 @@
    "label": "uv + GitHub",
    "sub": "install time",
    "side": "left",
+   "role": "installs the agent-voice command",
    "summary": "`uv tool install git+https://github.com/hevi-public/agent-voice`.",
    "detail": "Installs into ~/.local/share/uv/tools/agent-voice, links ~/.local/bin/agent-voice. About 1 GB of packages. Installs from git, not PyPI, because the spaCy model is a direct-URL dependency, which PyPI rejects.",
    "tags": [
@@ -116,6 +121,7 @@
    "label": "macOS audio",
    "sub": "afplay \u00b7 say",
    "side": "right",
+   "role": "plays the speech and the chimes",
    "summary": "/usr/bin/afplay plays WAVs and chimes; /usr/bin/say is the fallback voice.",
    "detail": "Every sound leaves through a subprocess: afplay for Kokoro's WAV and for the Glass/Ping chimes, say when Kokoro can't run.",
    "tags": [
@@ -129,6 +135,7 @@
    "label": "~/.agent-voice",
    "sub": "state folder",
    "side": "right",
+   "role": "locks, the server socket, mute flag",
    "summary": "playback.lock \u00b7 server.lock \u00b7 voice.sock \u00b7 muted \u00b7 hook-log files.",
    "detail": "AGENT_VOICE_HOME moves it. playback.lock serialises sound across processes; server.lock keeps one server; voice.sock (0600) is the server's socket, removed when it quits; muted exists only while muted; hook-log-on / hooks.log only while logging.",
    "tags": [
@@ -142,6 +149,7 @@
    "label": "Agent config",
    "sub": "~/.claude \u00b7 ~/.copilot",
    "side": "right",
+   "role": "skills, hook entries, settings.json",
    "summary": "settings.json (edited!), skills folders, Copilot hook file.",
    "detail": "The only file agent-voice edits rather than owns is ~/.claude/settings.json \u2014 merged atomically, backed up once, left untouched when it isn't valid JSON. Everything else here is agent-voice's own file.",
    "tags": [
@@ -156,6 +164,7 @@
    "label": "Hugging Face",
    "sub": "hub + ~/.cache",
    "side": "right",
+   "role": "the model download (prefetch only)",
    "summary": "Model download \u2014 only in `prefetch`.",
    "detail": "mlx-community/Kokoro-82M-bf16, about 340 MB, cached in ~/.cache/huggingface/hub. Speaking reads the cache only and sets HF_HUB_OFFLINE, so nothing contacts the network after the download.",
    "tags": [
@@ -169,6 +178,7 @@
    "label": "mlx-audio \u00b7 Kokoro",
    "sub": "neural TTS",
    "side": "right",
+   "role": "turns text into speech",
    "summary": "Kokoro-82M on Apple Silicon via MLX.",
    "detail": "load_model() builds the model once per process (the voice server keeps it warm); model.generate() yields audio segments. A cold first sentence costs ~3.5 s, a warm one ~0.35 s.",
    "tags": [
@@ -182,6 +192,7 @@
    "label": "spaCy \u00b7 espeak-ng",
    "sub": "misaki: text \u2192 phonemes",
    "side": "right",
+   "role": "works out how words are pronounced",
    "summary": "English pronunciation, with espeak for unknown words.",
    "detail": "misaki needs spaCy's en_core_web_sm (not on PyPI \u2192 direct wheel URL). espeak-ng keeps its data path in a 160-byte buffer: a real path over 159 bytes kills the whole process, hence the guard.",
    "tags": [
@@ -194,6 +205,7 @@
    "label": "soundfile",
    "sub": "WAV writer",
    "side": "right",
+   "role": "writes the WAV file",
    "summary": "Writes the samples to a WAV.",
    "detail": "Used for the temp WAV that afplay plays and for `say --out`.",
    "tags": [

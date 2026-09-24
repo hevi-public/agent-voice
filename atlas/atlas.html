@@ -82,7 +82,7 @@ button, input, select { font: inherit; color: inherit; }
 #map text { font-family: var(--ui); fill: var(--ink); }
 .ext rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
 .ext .t { font: 700 24px var(--display); }
-.ext .s { font: 15px var(--mono); fill: var(--muted); }
+.ext .s { font: 14px var(--ui); fill: var(--muted); }
 .pkg-box { fill: var(--pkg); stroke: var(--line); stroke-width: 2; }
 .pkg-face { transition: opacity .45s; }
 .pkg-face .t { font: 700 64px var(--display); letter-spacing: -0.02em; }
@@ -296,8 +296,8 @@ const box = new Map();       // id -> {x,y,w,h}
 const colOf = { cli: 0, hooks: 1, skill: 2, skillmd: 2, init: 2, server: 3, speech: 4 };
 {
   const left = externals.filter((n) => n.side === "left"), right = externals.filter((n) => n.side === "right");
-  left.forEach((n, i) => box.set(n.id, { x: 36, y: 150 + i * 150, w: 196, h: 104 }));
-  right.forEach((n, i) => box.set(n.id, { x: 1524, y: 70 + i * 142, w: 240, h: 104 }));
+  left.forEach((n, i) => box.set(n.id, { x: 36, y: 140 + i * 152, w: 196, h: 120 }));
+  right.forEach((n, i) => box.set(n.id, { x: 1524, y: 64 + i * 142, w: 240, h: 120 }));
   const stackY = { 0: 120, 1: 120, 2: 120, 3: 120, 4: 120 };
   for (const id of ["cli", "hooks", "skill", "skillmd", "init", "server", "speech"]) {
     const c = colOf[id], rows = functions.filter((f) => f.module === id);
@@ -347,9 +347,9 @@ textEl(gPkg, PKG.x + 22, PKG.y + 36, "agent-voice · src/agent_voice", "pkg-tag"
 for (const n of externals) {
   const b = box.get(n.id), g = el("g", { class: "ext node", "data-id": n.id }, gNodes);
   el("rect", { x: b.x, y: b.y, width: b.w, height: b.h, rx: 12 }, g);
-  const t = textEl(g, b.x + 16, b.y + 42, n.label, "t");
+  const t = textEl(g, b.x + 16, b.y + 38, n.label, "t");
   if (n.label.length > 13) t.style.fontSize = n.label.length > 17 ? "17px" : "20px";
-  textEl(g, b.x + 16, b.y + 72, n.sub, "s");
+  wrap(n.role, n.side === "left" ? 22 : 29).slice(0, 3).forEach((line, i) => textEl(g, b.x + 16, b.y + 64 + i * 19, line, "s"));
   el("g", { class: "dots" }, g);
   nodeEl.set(n.id, g);
 }
@@ -519,7 +519,7 @@ function drawEdges() {
     const cls = "edge " + (e.kind === "call" ? "" : e.kind === "io" ? "io" : "spawn") + (level < 2 ? " agg" : "") + (e.on ? " active" : "");
     const marker = e.on ? "a-active" : e.kind === "io" ? "a-io" : e.kind === "call" ? "a-call" : "a-proc";
     el("path", { d, class: cls, "marker-end": `url(#${marker})` }, gEdges);
-    const showLabel = level === 0 ? e.on : level === 1 ? (e.on || !active.size) : e.on || S.focus;
+    const showLabel = level === 0 ? false : level === 1 ? (e.on || !active.size) : e.on || S.focus;
     if (e.label && showLabel) {
       const size = level === 0 ? 17 : level === 1 ? 13 : 11;
       const y = place(mx, my - 5, e.label, size);
