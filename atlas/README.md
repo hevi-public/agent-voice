@@ -90,6 +90,11 @@ far in its prompt, runs in this repository, and has the Atlas MCP server
 attached, so it moves the map while it answers. The answer streams into the
 guide panel; Stop ends the agent.
 
+Each map move the answer makes becomes a step, and the answer itself is the
+last one, so ◀ ▶ and Play go back through it like a guided tour. Tick
+**Speak** (shown when agent-voice is installed) and the agent narrates each
+step aloud as the map moves; Stop cuts the voice off too.
+
 What that agent can do is limited to reading and steering:
 
 - **Claude** runs with `--restricted --tools Read,Grep,Glob --permission-mode dontAsk`.

@@ -83,6 +83,13 @@ def test_claude_ask_is_locked_down():
     assert config["env"]["ATLAS_VOICE"] == "0"
 
 
+def test_speak_turns_the_agents_voice_on():
+    argv = serve.ask_command("claude", 7788, voice=True)
+    assert json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]["atlas"]["env"]["ATLAS_VOICE"] == "1"
+    assert serve.VOICE_RULE in serve.ask_prompt("Why?", {}, [], voice=True)
+    assert serve.VOICE_RULE not in serve.ask_prompt("Why?", {}, [])
+
+
 def test_copilot_ask_takes_the_prompt_last():
     argv = serve.ask_command("copilot", 7788)
     assert argv[-1] == "-p" and "--deny-tool" in argv

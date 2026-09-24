@@ -148,6 +148,7 @@ button, input, select { font: inherit; color: inherit; }
 .stepno { font: 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .ask { display: flex; gap: 6px; }
 .ask input { flex: 1; min-width: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.ask .speak { display: flex; align-items: center; gap: 5px; font-size: 13px; white-space: nowrap; color: var(--muted); }
 .ask select { padding: 6px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; font: inherit; }
 .follow { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-left: auto; }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
@@ -250,6 +251,7 @@ pre.cmd { font: 12px/1.5 var(--mono); background: var(--faint); border-radius: 6
         <form class="ask" id="askForm" hidden>
           <input id="ask" placeholder="Ask about the code — Claude walks you through it" autocomplete="off">
           <select id="askAgent" aria-label="Who answers" hidden></select>
+          <label class="speak" id="speakWrap" title="The agent narrates each step aloud with agent-voice" hidden><input type="checkbox" id="speak"> Speak</label>
           <button class="btn primary" id="askBtn" type="submit">Ask</button>
           <button class="btn" id="stopBtn" type="button" hidden>Stop</button>
         </form>
@@ -713,7 +715,7 @@ for (const [id, l] of LENS) {
 let playTimer = null;
 function renderGuide() {
   const t = S.tour && TOUR.get(S.tour);
-  $("who").textContent = S.source === "human" ? (t ? "Tour" : "Guide") : (S.by || "Agent");
+  $("who").textContent = S.source === "human" ? (t ? t.by || "Tour" : "Guide") : (S.by || "Agent");
   $("gtitle").textContent = S.title || (t ? t.title : "Start anywhere");
   const text = S.note || (t ? t.steps[S.step - 1].text : "Click anything to inspect it, scroll to zoom from the system down to single functions, or pick a question to take a guided tour.");
   $("gtext").replaceChildren(codeText(text));
@@ -744,6 +746,7 @@ function go(input, source = "human", keepPlaying = false) {
     if (t) {
       const step = Math.min(Math.max(1, Number(s.step) || 1), t.steps.length), st = t.steps[step - 1];
       S.tour = t.id; S.step = step; S.hl = st.hl.slice(); S.note = ""; S.title = "";
+      if (st.lens) S.lens = st.lens.slice();
       level = st.level; focus = st.focus;
     } else { S.tour = null; S.step = 0; S.hl = []; }
   }
@@ -828,7 +831,7 @@ function fromAgent(state) {
   if (!state || typeof state !== "object") return;
   if (typeof state.seq === "number") { if (state.seq <= lastSeq) return; lastSeq = state.seq; }
   $("pulse").classList.add("on"); clearTimeout(fromAgent.t); fromAgent.t = setTimeout(() => $("pulse").classList.remove("on"), 8000);
-  if (following()) go(state, "agent");
+  if (following()) { go(state, "agent"); recordAskStep(); }
 }
 let reportChain = Promise.resolve(), reportTimer = null, reporter = null;
 function reportViewer() {
@@ -840,8 +843,20 @@ function reportViewer() {
 // ------------------------------------------------------------------ Ask: a question answered on the map, by whichever agent this view can reach
 const JSON_HEADERS = { "content-type": "application/json" };
 const AGENT_NAMES = { claude: "Claude", copilot: "Copilot", sample: "Claude" };
-let askRun = null, askCtl = null;
+let askRun = null, askCtl = null, askTour = null, askCount = 0;
 const turns = [];
+// Each map move an answer makes becomes a step of a tour titled with the question, so you can step back through it.
+function recordAskStep() {
+  if (!askTour) return;
+  askTour.steps.push({ focus: S.focus, level: S.level, hl: S.hl.slice(), lens: S.lens.slice(), text: S.note });
+  S.tour = askTour.id; S.step = askTour.steps.length; S.note = ""; renderGuide();
+}
+function finishAskTour(text) {
+  const t = askTour; askTour = null;
+  if (!t || !t.steps.length) { S.note = text || S.note; renderGuide(); return; }
+  if (text) t.steps.push({ ...t.steps[t.steps.length - 1], text });
+  if (S.tour === t.id) go({ tour: t.id, step: t.steps.length, by: t.by }, "agent");
+}
 function enableAsk(agents, run) {
   askRun = run;
   const pick = $("askAgent");
@@ -857,15 +872,17 @@ $("askForm").addEventListener("submit", async (e) => {
   const by = AGENT_NAMES[$("askAgent").value] || "Agent";
   $("ask").dataset.q = q; $("ask").value = "";
   askCtl = new AbortController(); $("stopBtn").hidden = false; $("askBtn").disabled = true;
+  askTour = { id: "ask-" + ++askCount, title: q, by, tags: [], steps: [] }; TOUR.set(askTour.id, askTour);
   S.source = "agent"; S.by = by; S.title = q; S.note = "Thinking…"; S.tour = null; renderGuide();
   turns.push({ role: "user", content: q });
   const onText = ({ text }) => { if (!text.trim()) return; S.note = text.split(/\n\s*\n/).slice(-6).join("\n\n") || "Thinking…"; renderGuide(); };
   try {
-    const { text } = await askRun(q, { onText, signal: askCtl.signal, agent: $("askAgent").value, by });
+    const { text } = await askRun(q, { onText, signal: askCtl.signal, agent: $("askAgent").value, by, voice: !$("speakWrap").hidden && $("speak").checked });
     turns.push({ role: "assistant", content: text });
-    S.note = text || S.note; renderGuide();
+    finishAskTour(text);
   } catch (err) {
     turns.pop();
+    finishAskTour("");
     const copy = { not_granted: "Asking Claude isn't allowed for this page.", rate_limited: "Too many questions for now — try again in a moment.", refused: "Claude declined that question.", tools_unavailable: "This view can't let Claude move the map." };
     S.note = err.code === "cancelled" ? (err.text || "Stopped.") : (err.text ? err.text + "\n\n" : "") + (copy[err.code] || err.message || "The answer was interrupted. Ask again to retry.");
     renderGuide();
@@ -883,8 +900,8 @@ function onLocalAnswer(a) {
   if (a.error) p.reject(Object.assign(new Error(a.error), { code: a.error === "Stopped." ? "cancelled" : "failed", text: a.text }));
   else p.resolve({ text: a.text });
 }
-async function localAsk(q, { onText, signal, agent }) {
-  const r = await fetch("ask", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ question: q, agent, viewer: snapshot(), history: turns.slice(0, -1).slice(-6) }) });
+async function localAsk(q, { onText, signal, agent, voice }) {
+  const r = await fetch("ask", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ question: q, agent, voice, viewer: snapshot(), history: turns.slice(0, -1).slice(-6) }) });
   const res = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(res.error || "The Atlas server refused the question."), { code: "failed" });
   return new Promise((resolve, reject) => {
@@ -906,7 +923,15 @@ if (location.protocol.startsWith("http") && typeof window.claude?.use !== "funct
       es.addEventListener("answer", (m) => { try { onLocalAnswer(JSON.parse(m.data)); } catch {} });
       reporter = (v) => fetch("viewer", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(v) });
       reportViewer();
-      fetch("status", { cache: "no-store" }).then((r) => r.json()).then((st) => { if (st.agents && st.agents.length) enableAsk(st.agents, localAsk); }).catch(() => {});
+      fetch("status", { cache: "no-store" }).then((r) => r.json()).then((st) => {
+        if (!st.agents || !st.agents.length) return;
+        enableAsk(st.agents, localAsk);
+        if (st.voice) {
+          $("speakWrap").hidden = false;
+          try { $("speak").checked = localStorage.getItem("atlas.speak") === "1"; } catch {}
+          $("speak").addEventListener("change", () => { try { localStorage.setItem("atlas.speak", $("speak").checked ? "1" : "0"); } catch {} });
+        }
+      }).catch(() => {});
     }
   } catch {}
 }
@@ -961,7 +986,9 @@ TOURS: ${M.tours.map((t) => t.id + ": " + t.title).join("; ")}`;
         inputSchema: { type: "object", properties: { focus: { type: "string", description: "node id" }, level: { type: "integer", enum: [0, 1, 2] }, highlight: { type: "array", items: { type: "string" } }, lens: { type: "array", items: { type: "string" } }, note: { type: "string" } }, required: ["note"] },
         async execute(input, ctx) {
           if (ctx.signal.aborted) return "stopped";
-          const r = go({ focus: input.focus ? String(input.focus) : S.focus, level: input.level, highlight: Array.isArray(input.highlight) ? input.highlight.map(String) : [], lens: Array.isArray(input.lens) ? input.lens.map(String) : S.lens, note: String(input.note || ""), title: $("ask").dataset.q, by: "Claude", tour: null }, "agent");
+          go({ focus: input.focus ? String(input.focus) : S.focus, level: input.level, highlight: Array.isArray(input.highlight) ? input.highlight.map(String) : [], lens: Array.isArray(input.lens) ? input.lens.map(String) : S.lens, note: String(input.note || ""), title: $("ask").dataset.q, by: "Claude", tour: null }, "agent");
+          recordAskStep();
+          const r = snapshot();
           await new Promise((res) => setTimeout(res, reduceMotion ? 300 : 2200));
           return r;
         } },

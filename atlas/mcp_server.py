@@ -182,6 +182,15 @@ class Atlas:
         if not self.voice:
             return "voice is off for this agent"
         if importlib.util.find_spec("agent_voice"):
+            # Through the voice server with a tag, so the page's Stop can cut it off.
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            from agent_voice import server as voice_server, speech
+
+            if speech.is_muted():
+                return "agent-voice is muted"
+            reply = voice_server.speak(text, tag=serve.VOICE_TAG, wait=True)
+            if reply is not None:
+                return bool(reply.get("ok"))
             argv = [sys.executable, "-m", "agent_voice", "say", text]
         elif shutil.which("agent-voice"):
             argv = ["agent-voice", "say", text]

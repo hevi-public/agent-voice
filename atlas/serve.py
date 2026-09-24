@@ -27,6 +27,7 @@ site is refused, so a DNS-rebinding page can't reach it either.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import queue
@@ -67,12 +68,14 @@ ASK_RULES = """You are the guide inside the agent-voice Atlas, an interactive ar
 
 Walk the viewer through the answer ON THE MAP: call the atlas_show tool once per point you make (2 to 6 calls), each with a short note (one or two sentences) that the page displays while it moves. Write no text before or between the tool calls; the notes are the walkthrough. Use node ids exactly as listed below. {levels}. Use lens to colour a concern across the map. Call atlas_node for a function's calls, tests, I/O and coverage, and read the source files when you need more than the map says.
 After the last atlas_show call, answer in 2 to 4 short plain-text paragraphs. Refer to functions by name. Say so when neither the map nor the code answers the question.
-
+{voice}
 {index}
 
 THE VIEWER IS LOOKING AT: {viewer}
 {history}
 THE QUESTION: {question}"""
+VOICE_RULE = "The viewer is listening: pass each note as `say` too, word for word, so it is spoken aloud. atlas_show returns once it has been spoken.\n"
+VOICE_TAG = "atlas"  # what mcp_server.py tags its speech with, so Stop can cut it off
 
 
 class Hub:
@@ -121,7 +124,11 @@ def installed_agents() -> list[str]:
     return [name for name in AGENTS if shutil.which(name)]
 
 
-def ask_prompt(question: str, viewer: dict, history: list) -> str:
+def voice_available() -> bool:
+    return importlib.util.find_spec("agent_voice") is not None or shutil.which("agent-voice") is not None
+
+
+def ask_prompt(question: str, viewer: dict, history: list, voice: bool = False) -> str:
     turns = []
     for turn in history[-6:]:
         if isinstance(turn, dict) and turn.get("role") in ("user", "assistant"):
@@ -130,6 +137,7 @@ def ask_prompt(question: str, viewer: dict, history: list) -> str:
     earlier = "EARLIER IN THIS CONVERSATION:\n" + "\n".join(turns) + "\n" if turns else ""
     return ASK_RULES.format(
         levels=mapdata.LEVELS,
+        voice=VOICE_RULE if voice else "",
         index=mapdata.index(mapdata.load()),
         viewer=json.dumps(viewer or {}),
         history=earlier,
@@ -137,13 +145,13 @@ def ask_prompt(question: str, viewer: dict, history: list) -> str:
     )
 
 
-def ask_command(agent: str, port: int) -> list[str]:
+def ask_command(agent: str, port: int, voice: bool = False) -> list[str]:
     """The agent's command line. The prompt goes to stdin (claude) or after -p (copilot)."""
     server = {
         "command": sys.executable,
         "args": [str(HERE / "mcp_server.py"), "--port", str(port)],
-        # The Ask box shows the answer; it doesn't speak it.
-        "env": {"ATLAS_BY": AGENTS[agent], "ATLAS_VOICE": "0"},
+        # Steps are spoken only when the viewer ticked Speak.
+        "env": {"ATLAS_BY": AGENTS[agent], "ATLAS_VOICE": "1" if voice else "0"},
     }
     if agent == "claude":
         # --restricted ignores your settings (so no hooks fire), confines the
@@ -171,9 +179,9 @@ class Asker:
         self.proc: subprocess.Popen | None = None
         self.current: str | None = None
 
-    def ask(self, question: str, agent: str, viewer: dict, history: list) -> str:
-        prompt = ask_prompt(question, viewer, history)
-        argv = ask_command(agent, self.port)
+    def ask(self, question: str, agent: str, viewer: dict, history: list, voice: bool = False) -> str:
+        prompt = ask_prompt(question, viewer, history, voice)
+        argv = ask_command(agent, self.port, voice)
         if agent == "copilot":
             argv.append(prompt)
         env = {k: v for k, v in os.environ.items() if k not in PARENT_AGENT_ENV}
@@ -195,6 +203,7 @@ class Asker:
             if proc is None or (ask_id and ask_id != self.current):
                 return False
         _kill(proc)
+        _hush()
         return True
 
     @staticmethod
@@ -258,6 +267,18 @@ def _claude_event(line: str, text: str, error: str | None) -> tuple[str, str | N
     return text, error
 
 
+def _hush() -> None:
+    """Cuts off a step the stopped agent is still speaking."""
+    try:
+        from agent_voice import server as voice_server
+    except ImportError:
+        return
+    try:
+        voice_server.cancel(VOICE_TAG)
+    except OSError:
+        pass
+
+
 def _kill(proc: subprocess.Popen) -> None:
     try:
         os.killpg(proc.pid, signal.SIGTERM)
@@ -305,7 +326,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/viewer":
             self._json(200, hub.viewer)
         elif path == "/status":
-            self._json(200, {"atlas": True, "pages": hub.pages, "agents": installed_agents()})
+            self._json(200, {"atlas": True, "pages": hub.pages, "agents": installed_agents(), "voice": voice_available()})
         elif path == "/events":
             self._events()
         else:
@@ -349,7 +370,7 @@ class Handler(BaseHTTPRequestHandler):
         viewer = data.get("viewer") if isinstance(data.get("viewer"), dict) else self.server.hub.viewer
         history = data.get("history") if isinstance(data.get("history"), list) else []
         try:
-            ask_id = self.server.asker.ask(question, agent, viewer, history)
+            ask_id = self.server.asker.ask(question, agent, viewer, history, voice=bool(data.get("voice")))
         except OSError as exc:
             return self._json(500, {"error": f"could not start {agent}: {exc}"})
         self._json(200, {"id": ask_id, "agent": agent})
