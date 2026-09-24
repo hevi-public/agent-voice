@@ -148,6 +148,7 @@ button, input, select { font: inherit; color: inherit; }
 .stepno { font: 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .ask { display: flex; gap: 6px; }
 .ask input { flex: 1; min-width: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.ask select { padding: 6px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; font: inherit; }
 .follow { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-left: auto; }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .pulse.on { background: var(--signal); box-shadow: 0 0 0 0 var(--signal); animation: ping 1.6s infinite; }
@@ -248,6 +249,7 @@ pre.cmd { font: 12px/1.5 var(--mono); background: var(--faint); border-radius: 6
         </div>
         <form class="ask" id="askForm" hidden>
           <input id="ask" placeholder="Ask about the code — Claude walks you through it" autocomplete="off">
+          <select id="askAgent" aria-label="Who answers" hidden></select>
           <button class="btn primary" id="askBtn" type="submit">Ask</button>
           <button class="btn" id="stopBtn" type="button" hidden>Stop</button>
         </form>
@@ -672,12 +674,12 @@ function renderOverview(box_) {
   box_.append(start);
   box_.append(h("h3", { text: "Steer it from any agent" }));
   if (transport === "local") {
-    box_.append(h("p", {}, "Anything that can run a shell command can drive this page — Claude Code, Copilot, Natter, a script:"));
+    box_.append(h("p", {}, "Agents that speak MCP steer it through the Atlas MCP server: ", h("code", { text: "python atlas/mcp_server.py --config" }), " prints the setup for Claude Code, Copilot CLI and VS Code. Anything that can run a shell command can drive it too — Natter, a script:"));
     box_.append(h("pre", { class: "cmd", text: `curl -s ${location.origin}/state \\\n  -H 'content-type: application/json' \\\n  -d '{"focus":"hooks.handle","level":2,\n       "note":"Every hook event lands here."}'\n\ncurl -s ${location.origin}/viewer   # what you're looking at` }));
   } else if (transport === "db") {
     box_.append(h("p", {}, "An agent with this artifact's tools writes the document ", h("code", { text: "guide/state" }), " and the page follows; the page reports what you're looking at in ", h("code", { text: "guide/viewer" }), ". The protocol and every node id are in ", h("code", { text: "guide/protocol" }), "."));
   } else {
-    box_.append(h("p", {}, "Run ", h("code", { text: "uv run python atlas/serve.py" }), " in the agent-voice repo to serve this page locally; then any agent steers it with ", h("code", { text: "curl" }), "."));
+    box_.append(h("p", {}, "Run ", h("code", { text: "uv run python atlas/serve.py" }), " in the agent-voice repo to serve this page locally; then any agent steers it through the Atlas MCP server or ", h("code", { text: "curl" }), ", and the Ask box answers with Claude Code or Copilot."));
   }
   box_.append(h("p", { class: "note" }, "State fields: focus (a node id), level (0 system, 1 modules, 2 functions), lens (list of: " + [...LENS.keys()].join(", ") + "), tour and step, highlight (node ids), note, title, by. In a browser console or automation: ", h("code", { text: "atlas.go({...})" }), ", ", h("code", { text: "atlas.state()" }), ", ", h("code", { text: "atlas.nodes()" }), "."));
 }
@@ -765,7 +767,8 @@ function go(input, source = "human", keepPlaying = false) {
   if (moved) frame = frameFor(level, focus);
   paint(); renderInspector(); renderGuide();
   if (frame) flyTo(frame, null, source === "init");
-  if (source === "human") { reportViewer(); try { history.replaceState(null, "", focus ? "#" + focus : location.pathname + location.search); } catch {} }
+  if (source !== "init") reportViewer();
+  if (source === "human") { try { history.replaceState(null, "", focus ? "#" + focus : location.pathname + location.search); } catch {} }
   return snapshot();
 }
 const snapshot = () => ({ level: S.level, focus: S.focus, lens: S.lens.slice(), tour: S.tour, step: S.step, highlight: S.hl.slice(), note: S.note, title: S.title });
@@ -834,7 +837,63 @@ function reportViewer() {
   reportTimer = setTimeout(() => { const v = { ...snapshot(), at: Date.now() }; reportChain = reportChain.then(() => reporter(v)).catch(() => {}); }, 700);
 }
 
-// local: served by atlas/serve.py
+// ------------------------------------------------------------------ Ask: a question answered on the map, by whichever agent this view can reach
+const JSON_HEADERS = { "content-type": "application/json" };
+const AGENT_NAMES = { claude: "Claude", copilot: "Copilot", sample: "Claude" };
+let askRun = null, askCtl = null;
+const turns = [];
+function enableAsk(agents, run) {
+  askRun = run;
+  const pick = $("askAgent");
+  pick.replaceChildren(...agents.map((a) => h("option", { value: a, text: AGENT_NAMES[a] || a })));
+  pick.hidden = agents.length < 2;
+  const label = () => { $("ask").placeholder = `Ask about the code — ${AGENT_NAMES[pick.value] || "the agent"} walks you through it`; };
+  pick.addEventListener("change", label); label();
+  $("askForm").hidden = false;
+}
+$("askForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("ask").value.trim(); if (!q || askCtl || !askRun) return;
+  const by = AGENT_NAMES[$("askAgent").value] || "Agent";
+  $("ask").dataset.q = q; $("ask").value = "";
+  askCtl = new AbortController(); $("stopBtn").hidden = false; $("askBtn").disabled = true;
+  S.source = "agent"; S.by = by; S.title = q; S.note = "Thinking…"; S.tour = null; renderGuide();
+  turns.push({ role: "user", content: q });
+  const onText = ({ text }) => { if (!text.trim()) return; S.note = text.split(/\n\s*\n/).slice(-6).join("\n\n") || "Thinking…"; renderGuide(); };
+  try {
+    const { text } = await askRun(q, { onText, signal: askCtl.signal, agent: $("askAgent").value, by });
+    turns.push({ role: "assistant", content: text });
+    S.note = text || S.note; renderGuide();
+  } catch (err) {
+    turns.pop();
+    const copy = { not_granted: "Asking Claude isn't allowed for this page.", rate_limited: "Too many questions for now — try again in a moment.", refused: "Claude declined that question.", tools_unavailable: "This view can't let Claude move the map." };
+    S.note = err.code === "cancelled" ? (err.text || "Stopped.") : (err.text ? err.text + "\n\n" : "") + (copy[err.code] || err.message || "The answer was interrupted. Ask again to retry.");
+    renderGuide();
+    if (["not_granted", "sampling_disabled", "not_declared", "capability_disabled", "tools_unavailable"].includes(err.code)) $("askForm").hidden = true;
+  } finally { askCtl = null; $("stopBtn").hidden = true; $("askBtn").disabled = false; }
+});
+$("stopBtn").addEventListener("click", () => askCtl && askCtl.abort());
+
+// local: serve.py runs `claude -p` or `copilot -p` with the map in the prompt and the Atlas MCP server attached
+const pendingAnswers = new Map();
+function onLocalAnswer(a) {
+  const p = pendingAnswers.get(a.id); if (!p) return;
+  if (!a.done) return p.onText({ text: a.text });
+  pendingAnswers.delete(a.id);
+  if (a.error) p.reject(Object.assign(new Error(a.error), { code: a.error === "Stopped." ? "cancelled" : "failed", text: a.text }));
+  else p.resolve({ text: a.text });
+}
+async function localAsk(q, { onText, signal, agent }) {
+  const r = await fetch("ask", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ question: q, agent, viewer: snapshot(), history: turns.slice(0, -1).slice(-6) }) });
+  const res = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(res.error || "The Atlas server refused the question."), { code: "failed" });
+  return new Promise((resolve, reject) => {
+    pendingAnswers.set(res.id, { onText, resolve, reject });
+    signal.addEventListener("abort", () => fetch("ask/stop", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ id: res.id }) }).catch(() => {}));
+  });
+}
+
+// local: served by atlas/serve.py or atlas/mcp_server.py
 if (location.protocol.startsWith("http") && typeof window.claude?.use !== "function") {
   try {
     const probe = await fetch("state", { cache: "no-store" });
@@ -844,7 +903,10 @@ if (location.protocol.startsWith("http") && typeof window.claude?.use !== "funct
       if (first && first.seq) lastSeq = first.seq - (Date.now() - first.at < 60000 ? 1 : 0);
       const es = new EventSource("events");
       es.onmessage = (m) => { try { fromAgent(JSON.parse(m.data)); } catch {} };
-      reporter = (v) => fetch("viewer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(v) });
+      es.addEventListener("answer", (m) => { try { onLocalAnswer(JSON.parse(m.data)); } catch {} });
+      reporter = (v) => fetch("viewer", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(v) });
+      reportViewer();
+      fetch("status", { cache: "no-store" }).then((r) => r.json()).then((st) => { if (st.agents && st.agents.length) enableAsk(st.agents, localAsk); }).catch(() => {});
     }
   } catch {}
 }
@@ -881,8 +943,6 @@ if (typeof window.claude?.use === "function") {
     if (!sample) return;
     const limits = await sample.limits().catch(() => null);
     if (!limits || !limits.tools) return;
-    $("askForm").hidden = false;
-    let ctl = null, turns = [];
     const index = M.nodes.map((n) => `${n.id} | ${n.kind} | ${n.label} | ${(n.tags || []).join(",")} | ${n.summary}`).join("\n");
     const edges = M.edges.map((e) => `${e.from} > ${e.to}${e.label ? " (" + e.label + ")" : ""}`).join("\n");
     const RULES = `You are the guide inside an interactive architecture map of agent-voice, a Python package that speaks coding agents' status updates aloud (Kokoro TTS on Apple Silicon) and chimes when Claude Code or Copilot waits for approval.
@@ -913,27 +973,10 @@ TOURS: ${M.tours.map((t) => t.id + ": " + t.title).join("; ")}`;
             calls: (out.get(n.id) || []).map((e) => e.to), calledBy: (inn.get(n.id) || []).map((e) => e.from) };
         } },
     ];
-    $("askForm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const q = $("ask").value.trim(); if (!q || ctl) return;
-      $("ask").dataset.q = q; $("ask").value = "";
-      ctl = new AbortController(); $("stopBtn").hidden = false; $("askBtn").disabled = true;
-      S.source = "agent"; S.by = "Claude"; S.title = q; S.note = "Thinking…"; S.tour = null; renderGuide();
-      turns.push({ role: "user", content: q });
-      try {
-        const { text } = await sample([{ role: "user", content: RULES }, ...turns.slice(-5)], { tools, signal: ctl.signal, modelTier: "default",
-          onText: ({ text }) => { const final = text.split(/\n\s*\n/).slice(-6).join("\n\n"); S.note = final; renderGuide(); } });
-        turns.push({ role: "assistant", content: text });
-        S.note = text; renderGuide();
-      } catch (err) {
-        turns.pop();
-        const copy = { not_granted: "Asking Claude isn't allowed for this page.", rate_limited: "Too many questions for now — try again in a moment.", refused: "Claude declined that question.", tools_unavailable: "This view can't let Claude move the map." };
-        S.note = err.code === "cancelled" ? (err.text || "Stopped.") : (err.text ? err.text + "\n\n" : "") + (copy[err.code] || "The answer was interrupted. Ask again to retry.");
-        renderGuide();
-        if (["not_granted", "sampling_disabled", "not_declared", "capability_disabled", "tools_unavailable"].includes(err.code)) $("askForm").hidden = true;
-      } finally { ctl = null; $("stopBtn").hidden = true; $("askBtn").disabled = false; }
+    enableAsk(["sample"], async (q, { onText, signal }) => {
+      const { text } = await sample([{ role: "user", content: RULES }, ...turns.slice(-5)], { tools, signal, modelTier: "default", onText });
+      return { text };
     });
-    $("stopBtn").addEventListener("click", () => ctl && ctl.abort());
   });
 }
 })();

@@ -276,6 +276,10 @@ uv run pytest
 The tests don't load the model. To check the real voice, run
 `uv run agent-voice say "test"`.
 
+To find your way around the code, open the Atlas, an interactive map of it
+that any agent can walk you through: `uv run python atlas/serve.py --open`.
+See [atlas/README.md](atlas/README.md).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
