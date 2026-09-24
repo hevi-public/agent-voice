@@ -1,0 +1,4117 @@
+{
+ "repo": "https://github.com/hevi-public/agent-voice",
+ "commit": "fffd80d",
+ "lenses": [
+  {
+   "id": "security",
+   "label": "Security",
+   "q": "What touches security?"
+  },
+  {
+   "id": "privacy",
+   "label": "Privacy",
+   "q": "What is never spoken or logged?"
+  },
+  {
+   "id": "network",
+   "label": "Network",
+   "q": "What touches the network?"
+  },
+  {
+   "id": "audio",
+   "label": "Audio",
+   "q": "What makes sound?"
+  },
+  {
+   "id": "files",
+   "label": "Files & config",
+   "q": "What reads or writes files?"
+  },
+  {
+   "id": "process",
+   "label": "Processes",
+   "q": "What starts or talks to another process?"
+  },
+  {
+   "id": "resilience",
+   "label": "Fallbacks",
+   "q": "What keeps working when something fails?"
+  },
+  {
+   "id": "performance",
+   "label": "Speed",
+   "q": "What makes it fast?"
+  },
+  {
+   "id": "agent",
+   "label": "Agent-facing",
+   "q": "What do Claude Code and Copilot touch?"
+  }
+ ],
+ "nodes": [
+  {
+   "id": "ext.user",
+   "kind": "external",
+   "label": "You",
+   "sub": "terminal",
+   "side": "left",
+   "summary": "Runs agent-voice commands and hears the result.",
+   "detail": "Installs with uv, runs install-skill / install-hooks, mutes for meetings, reads `doctor`. Approves and answers agent prompts at the keyboard \u2014 which is why alerts are chimes by default.",
+   "tags": [
+    "agent"
+   ]
+  },
+  {
+   "id": "ext.claude",
+   "kind": "external",
+   "label": "Claude Code",
+   "sub": "agent",
+   "side": "left",
+   "summary": "Loads the skill, runs `agent-voice say`, fires hooks.",
+   "detail": "Reads SKILL.md from ~/.claude/skills and calls `agent-voice say` through its Bash tool. Its PermissionRequest hook fires when an approval dialog opens \u2014 its question tool (AskUserQuestion) goes through it too. With --speak, PostToolUse, PostToolUseFailure, UserPromptSubmit and Stop fire the cancels. Hooks get the event as JSON on stdin and treat stdout as a verdict.",
+   "tags": [
+    "agent"
+   ]
+  },
+  {
+   "id": "ext.copilot",
+   "kind": "external",
+   "label": "Copilot CLI",
+   "sub": "agent",
+   "side": "left",
+   "summary": "Loads the skill, runs `agent-voice say`, fires notification hooks.",
+   "detail": "Reads SKILL.md from ~/.copilot/skills. Its `notification` hook carries notification_type permission_prompt (approval) or elicitation_dialog (assumed to be a question \u2014 undocumented, unconfirmed). Its payloads don't name their event, so installed commands pass --event.",
+   "tags": [
+    "agent"
+   ]
+  },
+  {
+   "id": "ext.vscode",
+   "kind": "external",
+   "label": "Copilot in VS Code",
+   "sub": "agent",
+   "side": "left",
+   "summary": "Loads the skill only.",
+   "detail": "Reads ~/.claude/skills and ~/.copilot/skills (so it lists the skill twice). Has no approval event, so gets no hooks.",
+   "tags": [
+    "agent"
+   ]
+  },
+  {
+   "id": "ext.install",
+   "kind": "external",
+   "label": "uv + GitHub",
+   "sub": "install time",
+   "side": "left",
+   "summary": "`uv tool install git+https://github.com/hevi-public/agent-voice`.",
+   "detail": "Installs into ~/.local/share/uv/tools/agent-voice, links ~/.local/bin/agent-voice. About 1 GB of packages. Installs from git, not PyPI, because the spaCy model is a direct-URL dependency, which PyPI rejects.",
+   "tags": [
+    "network",
+    "files"
+   ]
+  },
+  {
+   "id": "ext.audio",
+   "kind": "external",
+   "label": "macOS audio",
+   "sub": "afplay \u00b7 say",
+   "side": "right",
+   "summary": "/usr/bin/afplay plays WAVs and chimes; /usr/bin/say is the fallback voice.",
+   "detail": "Every sound leaves through a subprocess: afplay for Kokoro's WAV and for the Glass/Ping chimes, say when Kokoro can't run.",
+   "tags": [
+    "audio",
+    "process"
+   ]
+  },
+  {
+   "id": "ext.state",
+   "kind": "external",
+   "label": "~/.agent-voice",
+   "sub": "state folder",
+   "side": "right",
+   "summary": "playback.lock \u00b7 server.lock \u00b7 voice.sock \u00b7 muted \u00b7 hook-log files.",
+   "detail": "AGENT_VOICE_HOME moves it. playback.lock serialises sound across processes; server.lock keeps one server; voice.sock (0600) is the server's socket, removed when it quits; muted exists only while muted; hook-log-on / hooks.log only while logging.",
+   "tags": [
+    "files",
+    "security"
+   ]
+  },
+  {
+   "id": "ext.config",
+   "kind": "external",
+   "label": "Agent config",
+   "sub": "~/.claude \u00b7 ~/.copilot",
+   "side": "right",
+   "summary": "settings.json (edited!), skills folders, Copilot hook file.",
+   "detail": "The only file agent-voice edits rather than owns is ~/.claude/settings.json \u2014 merged atomically, backed up once, left untouched when it isn't valid JSON. Everything else here is agent-voice's own file.",
+   "tags": [
+    "files",
+    "security",
+    "agent"
+   ]
+  },
+  {
+   "id": "ext.hf",
+   "kind": "external",
+   "label": "Hugging Face",
+   "sub": "hub + ~/.cache",
+   "side": "right",
+   "summary": "Model download \u2014 only in `prefetch`.",
+   "detail": "mlx-community/Kokoro-82M-bf16, about 340 MB, cached in ~/.cache/huggingface/hub. Speaking reads the cache only and sets HF_HUB_OFFLINE, so nothing contacts the network after the download.",
+   "tags": [
+    "network",
+    "files"
+   ]
+  },
+  {
+   "id": "ext.mlx",
+   "kind": "external",
+   "label": "mlx-audio \u00b7 Kokoro",
+   "sub": "neural TTS",
+   "side": "right",
+   "summary": "Kokoro-82M on Apple Silicon via MLX.",
+   "detail": "load_model() builds the model once per process (the voice server keeps it warm); model.generate() yields audio segments. A cold first sentence costs ~3.5 s, a warm one ~0.35 s.",
+   "tags": [
+    "audio",
+    "performance"
+   ]
+  },
+  {
+   "id": "ext.g2p",
+   "kind": "external",
+   "label": "spaCy \u00b7 espeak-ng",
+   "sub": "misaki: text \u2192 phonemes",
+   "side": "right",
+   "summary": "English pronunciation, with espeak for unknown words.",
+   "detail": "misaki needs spaCy's en_core_web_sm (not on PyPI \u2192 direct wheel URL). espeak-ng keeps its data path in a 160-byte buffer: a real path over 159 bytes kills the whole process, hence the guard.",
+   "tags": [
+    "resilience"
+   ]
+  },
+  {
+   "id": "ext.sf",
+   "kind": "external",
+   "label": "soundfile",
+   "sub": "WAV writer",
+   "side": "right",
+   "summary": "Writes the samples to a WAV.",
+   "detail": "Used for the temp WAV that afplay plays and for `say --out`.",
+   "tags": [
+    "files"
+   ]
+  },
+  {
+   "id": "cli",
+   "kind": "module",
+   "label": "cli.py",
+   "file": "src/agent_voice/cli.py",
+   "lines": 297,
+   "summary": "The `agent-voice` command: parses a subcommand and hands it to the module that does the work.",
+   "detail": "Also the `hook` entry point the agents call, which always exits 0 and prints nothing: an agent reads a hook's output as a verdict. No bare `speak` alias \u2014 Homebrew's espeak-ng owns that name.",
+   "tags": [
+    "agent"
+   ],
+   "history": [
+    {
+     "hash": "fffd80d",
+     "date": "2026-09-24",
+     "subject": "Chime for approvals and questions by default; words behind --speak"
+    },
+    {
+     "hash": "0834394",
+     "date": "2026-09-23",
+     "subject": "Announce questions, speak paths on request, and log hook events"
+    },
+    {
+     "hash": "cf8e1ca",
+     "date": "2026-09-23",
+     "subject": "Keep Kokoro loaded in a voice server, and stop announcements once answered"
+    },
+    {
+     "hash": "aafa7bf",
+     "date": "2026-09-23",
+     "subject": "Add announcer and conversational modes; point Copilot at its instructions file"
+    },
+    {
+     "hash": "fd1bf98",
+     "date": "2026-09-23",
+     "subject": "Fail over cleanly when the install is too deep for espeak-ng"
+    },
+    {
+     "hash": "da1f670",
+     "date": "2026-09-23",
+     "subject": "Announce tool-approval prompts through the agents' hooks"
+    },
+    {
+     "hash": "9742212",
+     "date": "2026-09-23",
+     "subject": "Install the skill only into agent folders that already exist"
+    },
+    {
+     "hash": "d83fde6",
+     "date": "2026-09-23",
+     "subject": "Contact Hugging Face only to download the model; add the MIT license"
+    },
+    {
+     "hash": "1b576ed",
+     "date": "2026-09-23",
+     "subject": "Replace the `speak` command with `agent-voice say`"
+    },
+    {
+     "hash": "6d5c66b",
+     "date": "2026-09-23",
+     "subject": "Speak agent status updates aloud, locally, from a reusable package"
+    }
+   ],
+   "cover": 62
+  },
+  {
+   "id": "hooks",
+   "kind": "module",
+   "label": "hooks.py",
+   "file": "src/agent_voice/hooks.py",
+   "lines": 499,
+   "summary": "Turns agent hook events into chimes or spoken alerts, cancels them, and installs the hook entries.",
+   "detail": "Stateless per event. Default: a chime (Glass = approval, Ping = question). With --speak: a sentence naming the tool kind and project, queued on the voice server and cancelled when the agent moves on.",
+   "tags": [
+    "agent",
+    "security"
+   ],
+   "history": [
+    {
+     "hash": "fffd80d",
+     "date": "2026-09-24",
+     "subject": "Chime for approvals and questions by default; words behind --speak"
+    },
+    {
+     "hash": "0834394",
+     "date": "2026-09-23",
+     "subject": "Announce questions, speak paths on request, and log hook events"
+    },
+    {
+     "hash": "cf8e1ca",
+     "date": "2026-09-23",
+     "subject": "Keep Kokoro loaded in a voice server, and stop announcements once answered"
+    },
+    {
+     "hash": "7400528",
+     "date": "2026-09-23",
+     "subject": "Announce approvals at once, statelessly; name worktrees by their repo"
+    },
+    {
+     "hash": "f2f494a",
+     "date": "2026-09-23",
+     "subject": "Make every approval note delete itself within 30 seconds"
+    },
+    {
+     "hash": "041a1f1",
+     "date": "2026-09-23",
+     "subject": "Announce approvals only once they have waited, in agent-neutral words"
+    },
+    {
+     "hash": "da1f670",
+     "date": "2026-09-23",
+     "subject": "Announce tool-approval prompts through the agents' hooks"
+    }
+   ],
+   "cover": 94
+  },
+  {
+   "id": "skill",
+   "kind": "module",
+   "label": "skill.py",
+   "file": "src/agent_voice/skill.py",
+   "lines": 148,
+   "summary": "Installs SKILL.md where Claude Code and Copilot look for skills; prints the always-on instruction.",
+   "detail": "Never creates ~/.claude or ~/.copilot; keeps a SKILL.md you've edited unless --force.",
+   "tags": [
+    "agent",
+    "files"
+   ],
+   "history": [
+    {
+     "hash": "aafa7bf",
+     "date": "2026-09-23",
+     "subject": "Add announcer and conversational modes; point Copilot at its instructions file"
+    },
+    {
+     "hash": "9742212",
+     "date": "2026-09-23",
+     "subject": "Install the skill only into agent folders that already exist"
+    },
+    {
+     "hash": "1b576ed",
+     "date": "2026-09-23",
+     "subject": "Replace the `speak` command with `agent-voice say`"
+    },
+    {
+     "hash": "6d5c66b",
+     "date": "2026-09-23",
+     "subject": "Speak agent status updates aloud, locally, from a reusable package"
+    }
+   ],
+   "cover": 100
+  },
+  {
+   "id": "skillmd",
+   "kind": "module",
+   "label": "SKILL.md",
+   "file": "src/agent_voice/skill/SKILL.md",
+   "lines": 93,
+   "summary": "What the agent reads: when to speak, how, and the two modes.",
+   "detail": "Announcer (default) speaks when done, blocked or failed; conversational speaks every reply. The mode is a word after `/agent-voice`, read from the invocation itself \u2014 no placeholder syntax \u2014 so it works in both agents. Never speak secrets; paths only when asked.",
+   "tags": [
+    "agent",
+    "privacy"
+   ],
+   "history": [
+    {
+     "hash": "0834394",
+     "date": "2026-09-23",
+     "subject": "Announce questions, speak paths on request, and log hook events"
+    },
+    {
+     "hash": "aafa7bf",
+     "date": "2026-09-23",
+     "subject": "Add announcer and conversational modes; point Copilot at its instructions file"
+    },
+    {
+     "hash": "1b576ed",
+     "date": "2026-09-23",
+     "subject": "Replace the `speak` command with `agent-voice say`"
+    },
+    {
+     "hash": "6d5c66b",
+     "date": "2026-09-23",
+     "subject": "Speak agent status updates aloud, locally, from a reusable package"
+    }
+   ],
+   "cover": null
+  },
+  {
+   "id": "server",
+   "kind": "module",
+   "label": "server.py",
+   "file": "src/agent_voice/server.py",
+   "lines": 348,
+   "summary": "The voice server: a background process that keeps Kokoro warm, plus its client.",
+   "detail": "Unix socket (0600) in ~/.agent-voice, one JSON line each way. One speaker at a time; tagged requests can be cancelled; quits after 30 idle minutes and removes its socket.",
+   "tags": [
+    "performance",
+    "process"
+   ],
+   "history": [
+    {
+     "hash": "cf8e1ca",
+     "date": "2026-09-23",
+     "subject": "Keep Kokoro loaded in a voice server, and stop announcements once answered"
+    }
+   ],
+   "cover": 91
+  },
+  {
+   "id": "speech",
+   "kind": "module",
+   "label": "speech.py",
+   "file": "src/agent_voice/speech.py",
+   "lines": 314,
+   "summary": "Text-to-speech core: settings, model loading, synthesis, playback and fallbacks.",
+   "detail": "Everything that touches Kokoro. Heavy imports are lazy, so the CLI and hooks start fast. Falls back to macOS `say` whenever Kokoro can't produce audio.",
+   "tags": [
+    "audio",
+    "resilience"
+   ],
+   "history": [
+    {
+     "hash": "fd1bf98",
+     "date": "2026-09-23",
+     "subject": "Fail over cleanly when the install is too deep for espeak-ng"
+    },
+    {
+     "hash": "d83fde6",
+     "date": "2026-09-23",
+     "subject": "Contact Hugging Face only to download the model; add the MIT license"
+    },
+    {
+     "hash": "6d5c66b",
+     "date": "2026-09-23",
+     "subject": "Speak agent status updates aloud, locally, from a reusable package"
+    }
+   ],
+   "cover": 86
+  },
+  {
+   "id": "init",
+   "kind": "module",
+   "label": "Library API",
+   "file": "src/agent_voice/__init__.py",
+   "lines": 33,
+   "summary": "`from agent_voice import say, save, synthesize, prefetch \u2026`",
+   "detail": "Re-exports speech.py for colleagues' projects. The library keeps Kokoro in the caller's own process rather than using the voice server.",
+   "tags": [],
+   "history": [
+    {
+     "hash": "d83fde6",
+     "date": "2026-09-23",
+     "subject": "Contact Hugging Face only to download the model; add the MIT license"
+    },
+    {
+     "hash": "6d5c66b",
+     "date": "2026-09-23",
+     "subject": "Speak agent status updates aloud, locally, from a reusable package"
+    }
+   ],
+   "cover": 100
+  },
+  {
+   "id": "cli._add_say_arguments",
+   "kind": "function",
+   "module": "cli",
+   "label": "_add_say_arguments()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 20,
+   "end": 26,
+   "summary": "The options `say` takes: text, --voice, --speed, --out, --no-fallback, -v.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "cli._read_text",
+   "kind": "function",
+   "module": "cli",
+   "label": "_read_text()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 29,
+   "end": 34,
+   "summary": "Text from the arguments, else from stdin (so quotes, $ and ! survive).",
+   "tags": [],
+   "io": [
+    [
+     "stdin",
+     "reads stdin when no text given"
+    ]
+   ],
+   "tests": [
+    "test_text_comes_from_stdin_when_no_arguments"
+   ],
+   "cover": 80
+  },
+  {
+   "id": "cli._run_say",
+   "kind": "function",
+   "module": "cli",
+   "label": "_run_say()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 37,
+   "end": 58,
+   "summary": "`agent-voice say`: sets HF_HUB_OFFLINE, checks mute, tries the voice server, else speaks in-process.",
+   "tags": [
+    "network",
+    "privacy"
+   ],
+   "io": [
+    [
+     "env",
+     "sets HF_HUB_OFFLINE=1"
+    ]
+   ],
+   "tests": [
+    "test_arguments_are_joined",
+    "test_nothing_to_say_is_a_usage_error",
+    "test_failure_exits_nonzero_with_a_message",
+    "test_say_turns_hugging_face_offline"
+   ],
+   "cover": 83
+  },
+  {
+   "id": "cli._say_via_server",
+   "kind": "function",
+   "module": "cli",
+   "label": "_say_via_server()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 61,
+   "end": 73,
+   "summary": "Hands the text to the voice server; False when there is none (the caller then speaks in-process). -v bypasses it.",
+   "tags": [
+    "performance",
+    "resilience"
+   ],
+   "io": [],
+   "tests": [
+    "test_say_goes_through_the_voice_server_when_there_is_one",
+    "test_say_speaks_in_process_without_a_server",
+    "test_a_server_error_is_reported"
+   ],
+   "cover": 90
+  },
+  {
+   "id": "cli._prefetch",
+   "kind": "function",
+   "module": "cli",
+   "label": "_prefetch()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 79,
+   "end": 83,
+   "summary": "`agent-voice prefetch`: the one command that downloads \u2014 the model, then one test sentence.",
+   "tags": [
+    "network"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli._voices",
+   "kind": "function",
+   "module": "cli",
+   "label": "_voices()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 86,
+   "end": 93,
+   "summary": "`agent-voice voices`: lists the English voices in the cached model.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli._harnesses",
+   "kind": "function",
+   "module": "cli",
+   "label": "_harnesses()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 96,
+   "end": 97,
+   "summary": "The --for choices, or all harnesses.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "cli._install_skill",
+   "kind": "function",
+   "module": "cli",
+   "label": "_install_skill()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 100,
+   "end": 115,
+   "summary": "`install-skill`: installs SKILL.md, then prints each installed agent's always-on instruction.",
+   "tags": [
+    "agent"
+   ],
+   "io": [],
+   "tests": [
+    "test_cli_install_skill_into_a_project",
+    "test_cli_install_skill_fails_without_any_harness",
+    "test_instruction_steps_only_for_installed_agents"
+   ],
+   "cover": 83
+  },
+  {
+   "id": "cli._describe",
+   "kind": "function",
+   "module": "cli",
+   "label": "_describe()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 118,
+   "end": 124,
+   "summary": "One line per install result: installed / updated / kept / skipped.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 83
+  },
+  {
+   "id": "cli._uninstall_skill",
+   "kind": "function",
+   "module": "cli",
+   "label": "_uninstall_skill()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 127,
+   "end": 130,
+   "summary": "`uninstall-skill`: removes agent-voice's skill folders only.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli._hook",
+   "kind": "function",
+   "module": "cli",
+   "label": "_hook()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 133,
+   "end": 140,
+   "summary": "`agent-voice hook`: the command agents run on each event. Reads stdin, never prints, always exits 0.",
+   "tags": [
+    "agent",
+    "security"
+   ],
+   "io": [
+    [
+     "stdin",
+     "hook event JSON from the agent"
+    ]
+   ],
+   "tests": [
+    "test_cli_hook_is_silent_and_always_succeeds"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "cli._install_hooks",
+   "kind": "function",
+   "module": "cli",
+   "label": "_install_hooks()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 143,
+   "end": 149,
+   "summary": "`install-hooks [--speak]`: installs chime (or spoken) hooks for each agent that's set up.",
+   "tags": [
+    "agent",
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli._uninstall_hooks",
+   "kind": "function",
+   "module": "cli",
+   "label": "_uninstall_hooks()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 152,
+   "end": 155,
+   "summary": "`uninstall-hooks`: removes exactly what install-hooks added.",
+   "tags": [
+    "agent",
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli._serve",
+   "kind": "function",
+   "module": "cli",
+   "label": "_serve()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 158,
+   "end": 160,
+   "summary": "`agent-voice serve`: runs the voice server in this process (normally started for you).",
+   "tags": [
+    "process",
+    "performance"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli._stop",
+   "kind": "function",
+   "module": "cli",
+   "label": "_stop()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 163,
+   "end": 165,
+   "summary": "`agent-voice stop`: asks the server to quit and free its memory.",
+   "tags": [
+    "process"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli._hook_log",
+   "kind": "function",
+   "module": "cli",
+   "label": "_hook_log()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 168,
+   "end": 178,
+   "summary": "`hook-log on|show|off`: records which hook events arrive \u2014 names only.",
+   "tags": [
+    "privacy"
+   ],
+   "io": [
+    [
+     "file",
+     "shows ~/.agent-voice/hooks.log"
+    ]
+   ],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli._mute",
+   "kind": "function",
+   "module": "cli",
+   "label": "_mute()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 181,
+   "end": 184,
+   "summary": "`agent-voice mute`: creates the mute flag; every voice and chime goes silent.",
+   "tags": [
+    "audio"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli._unmute",
+   "kind": "function",
+   "module": "cli",
+   "label": "_unmute()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 187,
+   "end": 192,
+   "summary": "`agent-voice unmute`: removes the flag (AGENT_VOICE_MUTE in a shell still mutes it).",
+   "tags": [
+    "audio"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli._doctor",
+   "kind": "function",
+   "module": "cli",
+   "label": "_doctor()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 195,
+   "end": 223,
+   "summary": "`agent-voice doctor`: checks Apple Silicon, afplay, espeak path, spaCy model, cached model; shows mute, skill, hooks and server.",
+   "tags": [
+    "resilience"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "cli.main",
+   "kind": "function",
+   "module": "cli",
+   "label": "main()",
+   "depth": 0,
+   "file": "src/agent_voice/cli.py",
+   "line": 226,
+   "end": 297,
+   "summary": "Builds the argument parser for every subcommand and runs the chosen one; turns any exception into `agent-voice: \u2026` and exit 1.",
+   "tags": [
+    "agent"
+   ],
+   "io": [
+    [
+     "process",
+     "argv in, exit code out"
+    ]
+   ],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "hooks._tool_action",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_tool_action()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 61,
+   "end": 68,
+   "summary": "Tool name \u2192 spoken kind: Bash \u2192 'run a shell command', mcp__\u2026 \u2192 'use an external tool'. Never the tool's input.",
+   "tags": [
+    "privacy"
+   ],
+   "io": [],
+   "tests": [
+    "test_tool_kinds"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks._worktree_main",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_worktree_main()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 71,
+   "end": 85,
+   "summary": "Reads a git worktree's .git file to find its main checkout (or a bare repo).",
+   "tags": [
+    "files"
+   ],
+   "io": [
+    [
+     "file",
+     "reads <folder>/.git"
+    ]
+   ],
+   "tests": [
+    "test_a_worktree_is_named_after_its_main_checkout",
+    "test_a_relative_gitdir_is_followed",
+    "test_a_bare_repositorys_worktree_drops_the_git_suffix",
+    "test_a_submodule_keeps_its_own_name"
+   ],
+   "cover": 73
+  },
+  {
+   "id": "hooks.project_folder",
+   "kind": "function",
+   "module": "hooks",
+   "label": "project_folder()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 88,
+   "end": 97,
+   "summary": "The folder a session is named after: the repo's top level (the main checkout's, for a worktree), else cwd.",
+   "tags": [
+    "files"
+   ],
+   "io": [
+    [
+     "file",
+     "walks up looking for .git"
+    ]
+   ],
+   "tests": [
+    "test_a_subfolder_is_named_after_its_repository",
+    "test_outside_git_the_folder_itself_is_used"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks._project",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_project()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 100,
+   "end": 106,
+   "summary": "The project's name made speakable; dropped when it wouldn't read aloud.",
+   "tags": [
+    "privacy"
+   ],
+   "io": [],
+   "tests": [
+    "test_an_unspeakable_folder_name_is_left_out"
+   ],
+   "cover": 80
+  },
+  {
+   "id": "hooks.prompt_kind",
+   "kind": "function",
+   "module": "hooks",
+   "label": "prompt_kind()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 116,
+   "end": 123,
+   "summary": "'approval', 'question' or None: the only events that mean the agent waits on you.",
+   "tags": [
+    "agent"
+   ],
+   "io": [],
+   "tests": [
+    "test_other_events_are_ignored",
+    "test_copilot_permission_prompt"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks.announcement",
+   "kind": "function",
+   "module": "hooks",
+   "label": "announcement()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 126,
+   "end": 138,
+   "summary": "The spoken sentence (--speak): 'Your approval is needed to run a shell command in \u2026'. Never the command, never the agent's name.",
+   "tags": [
+    "privacy",
+    "security"
+   ],
+   "io": [],
+   "tests": [
+    "test_claude_prompt_names_the_tool_kind_and_project_but_no_agent",
+    "test_nothing_the_model_wrote_is_spoken",
+    "test_a_question_is_announced_as_a_question"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks._chime",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_chime()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 151,
+   "end": 160,
+   "summary": "The default alert: plays Glass (approval) or Ping (question) with a detached afplay.",
+   "tags": [
+    "audio",
+    "process"
+   ],
+   "io": [
+    [
+     "audio",
+     "afplay /System/Library/Sounds/Glass|Ping.aiff"
+    ]
+   ],
+   "tests": [
+    "test_an_approval_chimes_by_default",
+    "test_a_question_has_its_own_chime",
+    "test_the_chimes_exist",
+    "test_muted_means_no_chime"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks._session",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_session()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 183,
+   "end": 185,
+   "summary": "The event's session id, if it's safe to use as a tag (letters, digits, - and _ only).",
+   "tags": [
+    "security"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "hooks._tool_key",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_tool_key()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 188,
+   "end": 190,
+   "summary": "The tool's name as a tag suffix \u2014 not its input, which grows between events (AskUserQuestion adds answers).",
+   "tags": [
+    "security"
+   ],
+   "io": [],
+   "tests": [
+    "test_answering_a_question_cancels_it_although_its_input_grew"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks._speak_in_background",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_speak_in_background()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 193,
+   "end": 207,
+   "summary": "Queues the sentence on the voice server without waiting; without one, speaks from a detached process.",
+   "tags": [
+    "process",
+    "resilience",
+    "performance"
+   ],
+   "io": [
+    [
+     "process",
+     "spawns `python -m agent_voice say` if the server is unavailable"
+    ]
+   ],
+   "tests": [
+    "test_without_a_server_it_speaks_from_a_detached_process",
+    "test_muted_means_nothing_is_queued"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks._log_flag",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_log_flag()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 218,
+   "end": 219,
+   "summary": "Path of the hook-log switch file.",
+   "tags": [
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "hooks.log_path",
+   "kind": "function",
+   "module": "hooks",
+   "label": "log_path()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 222,
+   "end": 223,
+   "summary": "Path of hooks.log.",
+   "tags": [
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "hooks.set_logging",
+   "kind": "function",
+   "module": "hooks",
+   "label": "set_logging()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 226,
+   "end": 232,
+   "summary": "Turns hook logging on, or off and deletes the log.",
+   "tags": [
+    "privacy",
+    "files"
+   ],
+   "io": [
+    [
+     "file",
+     "~/.agent-voice/hook-log-on, hooks.log"
+    ]
+   ],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "hooks._log",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_log()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 235,
+   "end": 247,
+   "summary": "Appends event name, tool name and payload keys \u2014 never values \u2014 while logging is on.",
+   "tags": [
+    "privacy",
+    "files"
+   ],
+   "io": [
+    [
+     "file",
+     "appends ~/.agent-voice/hooks.log"
+    ]
+   ],
+   "tests": [
+    "test_hook_log_records_names_but_never_contents"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks.handle",
+   "kind": "function",
+   "module": "hooks",
+   "label": "handle()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 250,
+   "end": 284,
+   "summary": "One hook event in: a cancel event stops a spoken alert; a prompt event chimes (or speaks with --speak). Never raises, never prints.",
+   "tags": [
+    "agent",
+    "security"
+   ],
+   "io": [],
+   "tests": [
+    "test_hook_ignores_anything_else",
+    "test_claude_announcement_is_queued_tagged_with_its_tool_call",
+    "test_the_approved_tool_finishing_cancels_its_announcement",
+    "test_moving_on_cancels_the_whole_session",
+    "test_copilot_cancels_by_session_using_the_installed_event_name"
+   ],
+   "cover": 96
+  },
+  {
+   "id": "hooks.NoHarnessError",
+   "kind": "class",
+   "module": "hooks",
+   "label": "NoHarnessError",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 290,
+   "end": 291,
+   "summary": "Raised when no requested agent folder exists \u2014 nothing is written.",
+   "tags": [
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": null
+  },
+  {
+   "id": "hooks.Result",
+   "kind": "class",
+   "module": "hooks",
+   "label": "Result",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 295,
+   "end": 298,
+   "summary": "One install/uninstall outcome.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": null
+  },
+  {
+   "id": "hooks.executable",
+   "kind": "function",
+   "module": "hooks",
+   "label": "executable()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 301,
+   "end": 305,
+   "summary": "Absolute path of agent-voice, because an agent started from the Dock may lack ~/.local/bin on PATH.",
+   "tags": [
+    "resilience"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "hooks.hook_command",
+   "kind": "function",
+   "module": "hooks",
+   "label": "hook_command()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 308,
+   "end": 312,
+   "summary": "The command line written into agent config: `<path> hook --from claude --event X [--speak]`.",
+   "tags": [
+    "agent"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "hooks._quote",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_quote()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 315,
+   "end": 316,
+   "summary": "Single-quotes the program path when it has spaces or shell characters.",
+   "tags": [
+    "security"
+   ],
+   "io": [],
+   "tests": [
+    "test_a_program_path_with_spaces_is_quoted_and_still_recognised"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks._is_ours",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_is_ours()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 319,
+   "end": 320,
+   "summary": "Recognises agent-voice's own hook commands, so install/uninstall never touch anyone else's.",
+   "tags": [
+    "security"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "hooks._paths",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_paths()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 323,
+   "end": 328,
+   "summary": "Each agent's folder and the file its hooks live in.",
+   "tags": [
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "hooks._write_json",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_write_json()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 331,
+   "end": 335,
+   "summary": "Writes JSON atomically: temp file, then os.replace.",
+   "tags": [
+    "files",
+    "security"
+   ],
+   "io": [
+    [
+     "file",
+     "write temp + rename"
+    ]
+   ],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "hooks._read_settings",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_read_settings()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 338,
+   "end": 347,
+   "summary": "Reads settings.json; invalid JSON stops the install and leaves the file untouched.",
+   "tags": [
+    "files",
+    "security"
+   ],
+   "io": [
+    [
+     "file",
+     "reads ~/.claude/settings.json"
+    ]
+   ],
+   "tests": [
+    "test_invalid_settings_are_left_untouched"
+   ],
+   "cover": 89
+  },
+  {
+   "id": "hooks._events",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_events()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 356,
+   "end": 358,
+   "summary": "Which events to hook: only the prompt event for a chime, plus the cancel events with --speak.",
+   "tags": [
+    "agent"
+   ],
+   "io": [],
+   "tests": [
+    "test_by_default_only_the_prompt_events_are_hooked"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks._our_claude_handlers",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_our_claude_handlers()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 366,
+   "end": 378,
+   "summary": "Finds agent-voice's entries among all of settings.json's hooks.",
+   "tags": [
+    "security"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "hooks._install_claude",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_install_claude()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 381,
+   "end": 397,
+   "summary": "Merges agent-voice's entries into ~/.claude/settings.json, keeping everything else; backs the file up once.",
+   "tags": [
+    "files",
+    "security",
+    "agent"
+   ],
+   "io": [
+    [
+     "file",
+     "edits ~/.claude/settings.json; copies settings.json.agent-voice-backup"
+    ]
+   ],
+   "tests": [
+    "test_claude_hook_merges_into_existing_settings",
+    "test_claude_hook_into_a_fresh_settings_file",
+    "test_reinstalling_replaces_what_older_versions_added",
+    "test_switching_back_from_speak_to_chime_removes_the_stop_hooks"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks._remove_claude_hooks",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_remove_claude_hooks()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 400,
+   "end": 425,
+   "summary": "Removes only agent-voice's handlers, and any group or event they leave empty.",
+   "tags": [
+    "security",
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 87
+  },
+  {
+   "id": "hooks._copilot_file",
+   "kind": "function",
+   "module": "hooks",
+   "label": "_copilot_file()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 428,
+   "end": 435,
+   "summary": "The whole content of ~/.copilot/hooks/agent-voice.json \u2014 its own file, so nothing of yours is edited.",
+   "tags": [
+    "agent",
+    "files"
+   ],
+   "io": [],
+   "tests": [
+    "test_copilot_hook_gets_its_own_file"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks.install",
+   "kind": "function",
+   "module": "hooks",
+   "label": "install()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 438,
+   "end": 465,
+   "summary": "Installs hooks for each agent whose folder exists; fails without writing when none does.",
+   "tags": [
+    "files",
+    "security"
+   ],
+   "io": [],
+   "tests": [
+    "test_no_agent_folder_is_an_error"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "hooks.uninstall",
+   "kind": "function",
+   "module": "hooks",
+   "label": "uninstall()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 468,
+   "end": 485,
+   "summary": "Removes exactly what install added.",
+   "tags": [
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 93
+  },
+  {
+   "id": "hooks.installed",
+   "kind": "function",
+   "module": "hooks",
+   "label": "installed()",
+   "depth": 0,
+   "file": "src/agent_voice/hooks.py",
+   "line": 488,
+   "end": 499,
+   "summary": "Which agents have agent-voice hooks, for `doctor`.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 70
+  },
+  {
+   "id": "server.socket_path",
+   "kind": "function",
+   "module": "server",
+   "label": "socket_path()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 48,
+   "end": 49,
+   "summary": "~/.agent-voice/voice.sock.",
+   "tags": [
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "server.enabled",
+   "kind": "function",
+   "module": "server",
+   "label": "enabled()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 52,
+   "end": 54,
+   "summary": "False when AGENT_VOICE_SERVER=0.",
+   "tags": [
+    "resilience"
+   ],
+   "io": [],
+   "tests": [
+    "test_disabled_means_no_server"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "server.idle_timeout",
+   "kind": "function",
+   "module": "server",
+   "label": "idle_timeout()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 57,
+   "end": 61,
+   "summary": "30 minutes, or AGENT_VOICE_IDLE.",
+   "tags": [
+    "performance"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "server.Job",
+   "kind": "class",
+   "module": "server",
+   "label": "Job",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 68,
+   "end": 78,
+   "summary": "One request: text, voice, speed, tag, and the outcome the waiting client reads.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": null
+  },
+  {
+   "id": "server._matches",
+   "kind": "function",
+   "module": "server",
+   "label": "_matches()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 81,
+   "end": 82,
+   "summary": "Tag match: exact, or a prefix followed by ':' (a session cancels all its tools).",
+   "tags": [],
+   "io": [],
+   "tests": [
+    "test_cancel_drops_queued_announcements_by_tag_and_prefix"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "server.Voice",
+   "kind": "class",
+   "module": "server",
+   "label": "Voice",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 85,
+   "end": 190,
+   "summary": "The queue and its one worker.",
+   "tags": [
+    "performance"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 96
+  },
+  {
+   "id": "server.Voice.__init__",
+   "kind": "function",
+   "module": "server",
+   "label": "Voice.__init__()",
+   "depth": 1,
+   "file": "src/agent_voice/server.py",
+   "line": 92,
+   "end": 108,
+   "summary": "Injectable synthesize/player, so tests run the queue without Kokoro or speakers.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "server.Voice.submit",
+   "kind": "function",
+   "module": "server",
+   "label": "Voice.submit()",
+   "depth": 1,
+   "file": "src/agent_voice/server.py",
+   "line": 110,
+   "end": 114,
+   "summary": "Queues a job and wakes the worker.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "server.Voice.cancel",
+   "kind": "function",
+   "module": "server",
+   "label": "Voice.cancel()",
+   "depth": 1,
+   "file": "src/agent_voice/server.py",
+   "line": 116,
+   "end": 130,
+   "summary": "Drops queued jobs with the tag and terminates the one playing.",
+   "tags": [
+    "audio"
+   ],
+   "io": [
+    [
+     "process",
+     "terminates the running afplay"
+    ]
+   ],
+   "tests": [
+    "test_cancel_stops_what_is_playing"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "server.Voice.stop",
+   "kind": "function",
+   "module": "server",
+   "label": "Voice.stop()",
+   "depth": 1,
+   "file": "src/agent_voice/server.py",
+   "line": 132,
+   "end": 135,
+   "summary": "Asks the worker to finish.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "server.Voice.idle_for",
+   "kind": "function",
+   "module": "server",
+   "label": "Voice.idle_for()",
+   "depth": 1,
+   "file": "src/agent_voice/server.py",
+   "line": 137,
+   "end": 140,
+   "summary": "Seconds since the last activity, for ping and doctor.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "server.Voice._next",
+   "kind": "function",
+   "module": "server",
+   "label": "Voice._next()",
+   "depth": 1,
+   "file": "src/agent_voice/server.py",
+   "line": 142,
+   "end": 152,
+   "summary": "Waits for the next job, or returns None once idle for the timeout.",
+   "tags": [
+    "performance"
+   ],
+   "io": [],
+   "tests": [
+    "test_goes_idle_and_returns"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "server.Voice.run",
+   "kind": "function",
+   "module": "server",
+   "label": "Voice.run()",
+   "depth": 1,
+   "file": "src/agent_voice/server.py",
+   "line": 154,
+   "end": 168,
+   "summary": "The worker loop \u2014 runs on the main thread, where MLX is happiest.",
+   "tags": [
+    "performance"
+   ],
+   "io": [],
+   "tests": [
+    "test_speaks_in_order_and_reports_the_engine"
+   ],
+   "cover": 92
+  },
+  {
+   "id": "server.Voice._speak",
+   "kind": "function",
+   "module": "server",
+   "label": "Voice._speak()",
+   "depth": 1,
+   "file": "src/agent_voice/server.py",
+   "line": 170,
+   "end": 190,
+   "summary": "Synthesises with the warm model, writes a temp WAV and plays it under the playback lock; falls back to `say`.",
+   "tags": [
+    "audio",
+    "resilience",
+    "process"
+   ],
+   "io": [
+    [
+     "audio",
+     "afplay speech.wav, or say"
+    ]
+   ],
+   "tests": [
+    "test_kokoro_failure_falls_back_to_say",
+    "test_without_fallback_the_error_is_returned"
+   ],
+   "cover": 89
+  },
+  {
+   "id": "server._Handler",
+   "kind": "class",
+   "module": "server",
+   "label": "_Handler",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 193,
+   "end": 229,
+   "summary": "One connection: one JSON request, one JSON reply.",
+   "tags": [
+    "process"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 85
+  },
+  {
+   "id": "server._Handler.handle",
+   "kind": "function",
+   "module": "server",
+   "label": "_Handler.handle()",
+   "depth": 1,
+   "file": "src/agent_voice/server.py",
+   "line": 194,
+   "end": 202,
+   "summary": "Reads the request line, answers, writes the reply.",
+   "tags": [
+    "process"
+   ],
+   "io": [
+    [
+     "socket",
+     "JSON line in / out"
+    ]
+   ],
+   "tests": [],
+   "cover": 75
+  },
+  {
+   "id": "server._Handler._answer",
+   "kind": "function",
+   "module": "server",
+   "label": "_Handler._answer()",
+   "depth": 1,
+   "file": "src/agent_voice/server.py",
+   "line": 205,
+   "end": 229,
+   "summary": "say (wait or not) \u00b7 cancel \u00b7 ping \u00b7 stop.",
+   "tags": [
+    "process"
+   ],
+   "io": [],
+   "tests": [
+    "test_protocol_round_trip"
+   ],
+   "cover": 89
+  },
+  {
+   "id": "server._Server",
+   "kind": "class",
+   "module": "server",
+   "label": "_Server",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 232,
+   "end": 233,
+   "summary": "A threaded Unix-socket server.",
+   "tags": [
+    "process"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": null
+  },
+  {
+   "id": "server.serve",
+   "kind": "function",
+   "module": "server",
+   "label": "serve()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 236,
+   "end": 265,
+   "summary": "Runs the server: takes server.lock (one instance), replaces a stale socket, binds 0600, warms Kokoro, works the queue, cleans up.",
+   "tags": [
+    "process",
+    "security",
+    "performance",
+    "files"
+   ],
+   "io": [
+    [
+     "file",
+     "server.lock, voice.sock (0600)"
+    ],
+    [
+     "socket",
+     "listens on voice.sock"
+    ]
+   ],
+   "tests": [
+    "test_stop_shuts_down_and_removes_the_socket",
+    "test_a_second_server_leaves_the_first_alone",
+    "test_a_stale_socket_is_replaced"
+   ],
+   "cover": 92
+  },
+  {
+   "id": "server.request",
+   "kind": "function",
+   "module": "server",
+   "label": "request()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 271,
+   "end": 289,
+   "summary": "Client side: one JSON request over the socket; None when no server answers.",
+   "tags": [
+    "process"
+   ],
+   "io": [
+    [
+     "socket",
+     "connects to voice.sock"
+    ]
+   ],
+   "tests": [],
+   "cover": 94
+  },
+  {
+   "id": "server.usable",
+   "kind": "function",
+   "module": "server",
+   "label": "usable()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 296,
+   "end": 297,
+   "summary": "Enabled, and the socket path fits in 104 bytes (macOS's limit).",
+   "tags": [
+    "resilience"
+   ],
+   "io": [],
+   "tests": [
+    "test_a_state_folder_too_deep_for_a_socket_means_no_server"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "server.running",
+   "kind": "function",
+   "module": "server",
+   "label": "running()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 300,
+   "end": 301,
+   "summary": "Pings the server.",
+   "tags": [
+    "process"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "server.start",
+   "kind": "function",
+   "module": "server",
+   "label": "start()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 304,
+   "end": 320,
+   "summary": "Starts a server in the background unless one answers; waits up to 10 s.",
+   "tags": [
+    "process",
+    "performance"
+   ],
+   "io": [
+    [
+     "process",
+     "spawns `python -m agent_voice serve` (detached)"
+    ]
+   ],
+   "tests": [],
+   "cover": 22
+  },
+  {
+   "id": "server.speak",
+   "kind": "function",
+   "module": "server",
+   "label": "speak()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 323,
+   "end": 338,
+   "summary": "Has the server speak, starting it if needed; None when there's no server to be had.",
+   "tags": [
+    "performance",
+    "resilience"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "server.cancel",
+   "kind": "function",
+   "module": "server",
+   "label": "cancel()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 341,
+   "end": 344,
+   "summary": "Stops a tag's announcements if a server runs \u2014 never starts one.",
+   "tags": [
+    "process"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "server.stop",
+   "kind": "function",
+   "module": "server",
+   "label": "stop()",
+   "depth": 0,
+   "file": "src/agent_voice/server.py",
+   "line": 347,
+   "end": 348,
+   "summary": "Asks the server to quit.",
+   "tags": [
+    "process"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "skill.instruction_steps",
+   "kind": "function",
+   "module": "skill",
+   "label": "instruction_steps()",
+   "depth": 0,
+   "file": "src/agent_voice/skill.py",
+   "line": 38,
+   "end": 56,
+   "summary": "Where each agent keeps always-on instructions (CLAUDE.md; ~/.copilot/instructions/agent-voice.instructions.md with applyTo) \u2014 printed, never written.",
+   "tags": [
+    "agent",
+    "security"
+   ],
+   "io": [],
+   "tests": [
+    "test_copilot_instructions_go_in_a_file_it_loads"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "skill.NoHarnessError",
+   "kind": "class",
+   "module": "skill",
+   "label": "NoHarnessError",
+   "depth": 0,
+   "file": "src/agent_voice/skill.py",
+   "line": 59,
+   "end": 60,
+   "summary": "Raised when no requested agent folder exists.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": null
+  },
+  {
+   "id": "skill.Target",
+   "kind": "class",
+   "module": "skill",
+   "label": "Target",
+   "depth": 0,
+   "file": "src/agent_voice/skill.py",
+   "line": 64,
+   "end": 67,
+   "summary": "An agent, its folder, and where its SKILL.md goes.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": null
+  },
+  {
+   "id": "skill.Result",
+   "kind": "class",
+   "module": "skill",
+   "label": "Result",
+   "depth": 0,
+   "file": "src/agent_voice/skill.py",
+   "line": 71,
+   "end": 75,
+   "summary": "One install/uninstall outcome.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": null
+  },
+  {
+   "id": "skill.skill_text",
+   "kind": "function",
+   "module": "skill",
+   "label": "skill_text()",
+   "depth": 0,
+   "file": "src/agent_voice/skill.py",
+   "line": 78,
+   "end": 79,
+   "summary": "Reads the bundled SKILL.md from the package.",
+   "tags": [
+    "files"
+   ],
+   "io": [
+    [
+     "file",
+     "package resource skill/SKILL.md"
+    ]
+   ],
+   "tests": [
+    "test_skill_has_the_frontmatter_both_harnesses_require",
+    "test_the_skill_takes_a_mode_in_a_form_both_agents_pass_on"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "skill.targets",
+   "kind": "function",
+   "module": "skill",
+   "label": "targets()",
+   "depth": 0,
+   "file": "src/agent_voice/skill.py",
+   "line": 82,
+   "end": 91,
+   "summary": "SKILL.md destinations: ~/.claude/skills & ~/.copilot/skills, or a repo's .claude/.github.",
+   "tags": [
+    "files",
+    "agent"
+   ],
+   "io": [],
+   "tests": [
+    "test_personal_install_covers_claude_and_copilot",
+    "test_project_install_uses_repo_folders"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "skill.install",
+   "kind": "function",
+   "module": "skill",
+   "label": "install()",
+   "depth": 0,
+   "file": "src/agent_voice/skill.py",
+   "line": 94,
+   "end": 136,
+   "summary": "Writes SKILL.md where the agent folder exists; keeps an edited one unless --force; never creates the agent's folder.",
+   "tags": [
+    "files",
+    "security"
+   ],
+   "io": [
+    [
+     "file",
+     "writes <agent>/skills/agent-voice/SKILL.md"
+    ]
+   ],
+   "tests": [
+    "test_a_missing_harness_folder_is_skipped_not_created",
+    "test_no_harness_folder_at_all_is_an_error_and_writes_nothing",
+    "test_edited_skill_is_kept_unless_forced"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "skill.uninstall",
+   "kind": "function",
+   "module": "skill",
+   "label": "uninstall()",
+   "depth": 0,
+   "file": "src/agent_voice/skill.py",
+   "line": 139,
+   "end": 148,
+   "summary": "Deletes agent-voice's skill folders only.",
+   "tags": [
+    "files"
+   ],
+   "io": [
+    [
+     "file",
+     "rmtree <agent>/skills/agent-voice"
+    ]
+   ],
+   "tests": [
+    "test_uninstall_removes_only_the_skill_folder"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "speech.VoiceError",
+   "kind": "class",
+   "module": "speech",
+   "label": "VoiceError",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 33,
+   "end": 34,
+   "summary": "Speech couldn't be produced \u2014 the trigger for the `say` fallback.",
+   "tags": [
+    "resilience"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": null
+  },
+  {
+   "id": "speech.state_dir",
+   "kind": "function",
+   "module": "speech",
+   "label": "state_dir()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 40,
+   "end": 43,
+   "summary": "~/.agent-voice, or AGENT_VOICE_HOME.",
+   "tags": [
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "speech._mute_flag",
+   "kind": "function",
+   "module": "speech",
+   "label": "_mute_flag()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 46,
+   "end": 47,
+   "summary": "Path of the mute flag.",
+   "tags": [
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "speech.is_muted",
+   "kind": "function",
+   "module": "speech",
+   "label": "is_muted()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 50,
+   "end": 53,
+   "summary": "AGENT_VOICE_MUTE, or the mute flag file.",
+   "tags": [
+    "audio"
+   ],
+   "io": [
+    [
+     "file",
+     "checks ~/.agent-voice/muted"
+    ]
+   ],
+   "tests": [
+    "test_muted_says_nothing"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "speech.set_muted",
+   "kind": "function",
+   "module": "speech",
+   "label": "set_muted()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 56,
+   "end": 62,
+   "summary": "Creates or removes the mute flag.",
+   "tags": [
+    "audio",
+    "files"
+   ],
+   "io": [
+    [
+     "file",
+     "~/.agent-voice/muted"
+    ]
+   ],
+   "tests": [
+    "test_unmute_removes_the_flag"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "speech.default_voice",
+   "kind": "function",
+   "module": "speech",
+   "label": "default_voice()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 65,
+   "end": 66,
+   "summary": "af_heart, or AGENT_VOICE_VOICE.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "speech.default_speed",
+   "kind": "function",
+   "module": "speech",
+   "label": "default_speed()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 69,
+   "end": 76,
+   "summary": "1.0, or AGENT_VOICE_SPEED.",
+   "tags": [],
+   "io": [],
+   "tests": [
+    "test_bad_speed_env_is_reported"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "speech.espeak_path_problem",
+   "kind": "function",
+   "module": "speech",
+   "label": "espeak_path_problem()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 87,
+   "end": 98,
+   "summary": "Refuses before espeak-ng can kill the process: its data path must fit in 159 bytes.",
+   "tags": [
+    "resilience"
+   ],
+   "io": [
+    [
+     "file",
+     "realpath of espeak-ng-data"
+    ]
+   ],
+   "tests": [
+    "test_an_install_too_deep_for_espeak_falls_back_instead_of_dying",
+    "test_a_normal_install_path_is_fine"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "speech.lang_code",
+   "kind": "function",
+   "module": "speech",
+   "label": "lang_code()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 101,
+   "end": 108,
+   "summary": "Kokoro voice \u2192 language: af_/am_ American, bf_/bm_ British; anything else refused.",
+   "tags": [],
+   "io": [],
+   "tests": [
+    "test_english_voices_map_to_their_language",
+    "test_non_english_voice_is_rejected"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "speech.model_path",
+   "kind": "function",
+   "module": "speech",
+   "label": "model_path()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 114,
+   "end": 134,
+   "summary": "The cached Kokoro snapshot. Downloads only when asked (prefetch); speaking never does.",
+   "tags": [
+    "network",
+    "files",
+    "security"
+   ],
+   "io": [
+    [
+     "network",
+     "snapshot_download (prefetch only)"
+    ],
+    [
+     "file",
+     "~/.cache/huggingface/hub"
+    ]
+   ],
+   "tests": [
+    "test_speaking_never_downloads_the_model"
+   ],
+   "cover": 89
+  },
+  {
+   "id": "speech.prefetch",
+   "kind": "function",
+   "module": "speech",
+   "label": "prefetch()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 137,
+   "end": 143,
+   "summary": "Downloads the model if missing, then renders one sentence so a broken install fails here.",
+   "tags": [
+    "network"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  },
+  {
+   "id": "speech._quiet",
+   "kind": "function",
+   "module": "speech",
+   "label": "_quiet()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 147,
+   "end": 155,
+   "summary": "Keeps mlx-audio's chatter off stdout and stderr.",
+   "tags": [],
+   "io": [],
+   "tests": [],
+   "cover": 71
+  },
+  {
+   "id": "speech._load_model",
+   "kind": "function",
+   "module": "speech",
+   "label": "_load_model()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 162,
+   "end": 177,
+   "summary": "Loads Kokoro once per process \u2014 the cost the voice server exists to pay once.",
+   "tags": [
+    "performance"
+   ],
+   "io": [
+    [
+     "lib",
+     "mlx_audio.tts.utils.load_model"
+    ]
+   ],
+   "tests": [],
+   "cover": 40
+  },
+  {
+   "id": "speech.synthesize",
+   "kind": "function",
+   "module": "speech",
+   "label": "synthesize()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 180,
+   "end": 199,
+   "summary": "Text \u2192 samples: guards espeak's path, picks the language, loads the model, runs Kokoro.",
+   "tags": [
+    "audio",
+    "resilience"
+   ],
+   "io": [
+    [
+     "lib",
+     "model.generate (Kokoro + misaki/spaCy/espeak)"
+    ]
+   ],
+   "tests": [],
+   "cover": 60
+  },
+  {
+   "id": "speech._playback_lock",
+   "kind": "function",
+   "module": "speech",
+   "label": "_playback_lock()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 206,
+   "end": 216,
+   "summary": "flock on playback.lock: two agents take turns instead of talking over each other.",
+   "tags": [
+    "audio",
+    "files"
+   ],
+   "io": [
+    [
+     "file",
+     "~/.agent-voice/playback.lock"
+    ]
+   ],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "speech._write_wav",
+   "kind": "function",
+   "module": "speech",
+   "label": "_write_wav()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 219,
+   "end": 222,
+   "summary": "Samples \u2192 WAV via soundfile.",
+   "tags": [
+    "files"
+   ],
+   "io": [
+    [
+     "file",
+     "temp WAV"
+    ]
+   ],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "speech.play",
+   "kind": "function",
+   "module": "speech",
+   "label": "play()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 225,
+   "end": 230,
+   "summary": "Writes a temp WAV and plays it with afplay under the lock (in-process path).",
+   "tags": [
+    "audio",
+    "process"
+   ],
+   "io": [
+    [
+     "audio",
+     "afplay"
+    ]
+   ],
+   "tests": [
+    "test_kokoro_output_is_played"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "speech._say_fallback",
+   "kind": "function",
+   "module": "speech",
+   "label": "_say_fallback()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 233,
+   "end": 239,
+   "summary": "macOS `say`, spoken or rendered to a WAV.",
+   "tags": [
+    "audio",
+    "resilience",
+    "process"
+   ],
+   "io": [
+    [
+     "audio",
+     "say"
+    ]
+   ],
+   "tests": [
+    "test_falls_back_to_say_when_kokoro_fails",
+    "test_save_fallback_writes_a_wave_file"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "speech._require_text",
+   "kind": "function",
+   "module": "speech",
+   "label": "_require_text()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 245,
+   "end": 249,
+   "summary": "Empty text is an error, not a fallback.",
+   "tags": [],
+   "io": [],
+   "tests": [
+    "test_empty_text_is_an_error_not_a_fallback"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "speech._warn_fallback",
+   "kind": "function",
+   "module": "speech",
+   "label": "_warn_fallback()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 252,
+   "end": 253,
+   "summary": "Says on stderr why Kokoro wasn't used.",
+   "tags": [
+    "resilience"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 100
+  },
+  {
+   "id": "speech.say",
+   "kind": "function",
+   "module": "speech",
+   "label": "say()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 256,
+   "end": 282,
+   "summary": "Library/in-process speak: mute check, synthesize, play; falls back to `say` unless fallback=False.",
+   "tags": [
+    "audio",
+    "resilience"
+   ],
+   "io": [],
+   "tests": [
+    "test_no_fallback_raises_the_original_error"
+   ],
+   "cover": 100
+  },
+  {
+   "id": "speech.save",
+   "kind": "function",
+   "module": "speech",
+   "label": "save()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 285,
+   "end": 306,
+   "summary": "Like say, but writes a WAV file.",
+   "tags": [
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 75
+  },
+  {
+   "id": "speech.english_voices",
+   "kind": "function",
+   "module": "speech",
+   "label": "english_voices()",
+   "depth": 0,
+   "file": "src/agent_voice/speech.py",
+   "line": 309,
+   "end": 314,
+   "summary": "The English voices in the cached model.",
+   "tags": [
+    "files"
+   ],
+   "io": [],
+   "tests": [],
+   "cover": 0
+  }
+ ],
+ "edges": [
+  {
+   "from": "cli._doctor",
+   "to": "hooks.installed",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._doctor",
+   "to": "server.idle_timeout",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._doctor",
+   "to": "server.running",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._doctor",
+   "to": "server.usable",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._doctor",
+   "to": "skill.targets",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._doctor",
+   "to": "speech.espeak_path_problem",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._doctor",
+   "to": "speech.is_muted",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._doctor",
+   "to": "speech.model_path",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._hook",
+   "to": "hooks.handle",
+   "kind": "call",
+   "label": "event"
+  },
+  {
+   "from": "cli._hook_log",
+   "to": "hooks.log_path",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._hook_log",
+   "to": "hooks.set_logging",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._install_hooks",
+   "to": "hooks.install",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._install_skill",
+   "to": "cli._describe",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._install_skill",
+   "to": "cli._harnesses",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._install_skill",
+   "to": "skill.install",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._install_skill",
+   "to": "skill.instruction_steps",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._install_skill",
+   "to": "skill.skill_text",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._install_skill",
+   "to": "skill.targets",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._mute",
+   "to": "speech.set_muted",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._prefetch",
+   "to": "speech.prefetch",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._run_say",
+   "to": "cli._read_text",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._run_say",
+   "to": "cli._say_via_server",
+   "kind": "call",
+   "label": "try the server"
+  },
+  {
+   "from": "cli._run_say",
+   "to": "speech.is_muted",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._run_say",
+   "to": "speech.save",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._run_say",
+   "to": "speech.say",
+   "kind": "call",
+   "label": "in-process"
+  },
+  {
+   "from": "cli._say_via_server",
+   "to": "server.speak",
+   "kind": "call",
+   "label": "speak"
+  },
+  {
+   "from": "cli._serve",
+   "to": "server.serve",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._stop",
+   "to": "server.stop",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._uninstall_hooks",
+   "to": "hooks.uninstall",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._uninstall_skill",
+   "to": "cli._harnesses",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._uninstall_skill",
+   "to": "skill.targets",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._uninstall_skill",
+   "to": "skill.uninstall",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._unmute",
+   "to": "speech.set_muted",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._voices",
+   "to": "speech.default_voice",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli._voices",
+   "to": "speech.english_voices",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "cli.main",
+   "to": "cli._add_say_arguments",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._chime",
+   "to": "speech.is_muted",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._copilot_file",
+   "to": "hooks._events",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._copilot_file",
+   "to": "hooks.hook_command",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._install_claude",
+   "to": "hooks._events",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._install_claude",
+   "to": "hooks._our_claude_handlers",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._install_claude",
+   "to": "hooks._read_settings",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._install_claude",
+   "to": "hooks._remove_claude_hooks",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._install_claude",
+   "to": "hooks._write_json",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._install_claude",
+   "to": "hooks.hook_command",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._log",
+   "to": "hooks._log_flag",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._log",
+   "to": "hooks.log_path",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._log_flag",
+   "to": "speech.state_dir",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._our_claude_handlers",
+   "to": "hooks._is_ours",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._project",
+   "to": "hooks.project_folder",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._remove_claude_hooks",
+   "to": "hooks._is_ours",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._remove_claude_hooks",
+   "to": "hooks._our_claude_handlers",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks._speak_in_background",
+   "to": "server.speak",
+   "kind": "call",
+   "label": "queue (no wait)"
+  },
+  {
+   "from": "hooks._speak_in_background",
+   "to": "speech.is_muted",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.announcement",
+   "to": "hooks._project",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.announcement",
+   "to": "hooks._tool_action",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.announcement",
+   "to": "hooks.prompt_kind",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.handle",
+   "to": "hooks._chime",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.handle",
+   "to": "hooks._log",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.handle",
+   "to": "hooks._session",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.handle",
+   "to": "hooks._speak_in_background",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.handle",
+   "to": "hooks._tool_key",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.handle",
+   "to": "hooks.announcement",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.handle",
+   "to": "hooks.prompt_kind",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.handle",
+   "to": "server.cancel",
+   "kind": "call",
+   "label": "cancel tag"
+  },
+  {
+   "from": "hooks.hook_command",
+   "to": "hooks._quote",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.hook_command",
+   "to": "hooks.executable",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.install",
+   "to": "hooks._copilot_file",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.install",
+   "to": "hooks._install_claude",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.install",
+   "to": "hooks._paths",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.install",
+   "to": "hooks._write_json",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.installed",
+   "to": "hooks._our_claude_handlers",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.installed",
+   "to": "hooks._paths",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.installed",
+   "to": "hooks._read_settings",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.log_path",
+   "to": "speech.state_dir",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.project_folder",
+   "to": "hooks._worktree_main",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.set_logging",
+   "to": "hooks._log_flag",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.set_logging",
+   "to": "hooks.log_path",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.uninstall",
+   "to": "hooks._paths",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.uninstall",
+   "to": "hooks._read_settings",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.uninstall",
+   "to": "hooks._remove_claude_hooks",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "hooks.uninstall",
+   "to": "hooks._write_json",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.Voice._speak",
+   "to": "speech._playback_lock",
+   "kind": "call",
+   "label": "takes turns"
+  },
+  {
+   "from": "server.Voice._speak",
+   "to": "speech._write_wav",
+   "kind": "call",
+   "label": "temp WAV"
+  },
+  {
+   "from": "server.Voice.cancel",
+   "to": "server._matches",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.Voice.run",
+   "to": "server.Voice._next",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.Voice.run",
+   "to": "server.Voice._speak",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server._Handler.handle",
+   "to": "server._Handler._answer",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.cancel",
+   "to": "server.request",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.request",
+   "to": "server.socket_path",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.running",
+   "to": "server.request",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.serve",
+   "to": "server.idle_timeout",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.serve",
+   "to": "server.socket_path",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.serve",
+   "to": "speech.state_dir",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.socket_path",
+   "to": "speech.state_dir",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.speak",
+   "to": "server.request",
+   "kind": "call",
+   "label": "say"
+  },
+  {
+   "from": "server.speak",
+   "to": "server.start",
+   "kind": "call",
+   "label": "start if needed"
+  },
+  {
+   "from": "server.speak",
+   "to": "server.usable",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.start",
+   "to": "server.running",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.stop",
+   "to": "server.request",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.usable",
+   "to": "server.enabled",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "server.usable",
+   "to": "server.socket_path",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "skill.install",
+   "to": "skill.skill_text",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech._load_model",
+   "to": "speech._quiet",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech._load_model",
+   "to": "speech.model_path",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech._mute_flag",
+   "to": "speech.state_dir",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech._playback_lock",
+   "to": "speech.state_dir",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech._say_fallback",
+   "to": "speech._playback_lock",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.english_voices",
+   "to": "speech.model_path",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.is_muted",
+   "to": "speech._mute_flag",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.play",
+   "to": "speech._playback_lock",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.play",
+   "to": "speech._write_wav",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.prefetch",
+   "to": "speech.model_path",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.prefetch",
+   "to": "speech.synthesize",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.save",
+   "to": "speech._require_text",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.save",
+   "to": "speech._say_fallback",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.save",
+   "to": "speech._warn_fallback",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.save",
+   "to": "speech._write_wav",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.save",
+   "to": "speech.synthesize",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.say",
+   "to": "speech._require_text",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.say",
+   "to": "speech._say_fallback",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.say",
+   "to": "speech._warn_fallback",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.say",
+   "to": "speech.is_muted",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.say",
+   "to": "speech.play",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.say",
+   "to": "speech.synthesize",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.set_muted",
+   "to": "speech._mute_flag",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.synthesize",
+   "to": "speech._load_model",
+   "kind": "call",
+   "label": "once per process"
+  },
+  {
+   "from": "speech.synthesize",
+   "to": "speech._quiet",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.synthesize",
+   "to": "speech._require_text",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.synthesize",
+   "to": "speech.default_speed",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.synthesize",
+   "to": "speech.default_voice",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.synthesize",
+   "to": "speech.espeak_path_problem",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "speech.synthesize",
+   "to": "speech.lang_code",
+   "kind": "call",
+   "label": ""
+  },
+  {
+   "from": "ext.user",
+   "to": "cli.main",
+   "kind": "io",
+   "label": "runs agent-voice \u2026"
+  },
+  {
+   "from": "ext.claude",
+   "to": "skillmd",
+   "kind": "io",
+   "label": "loads the skill"
+  },
+  {
+   "from": "ext.copilot",
+   "to": "skillmd",
+   "kind": "io",
+   "label": "loads the skill"
+  },
+  {
+   "from": "ext.vscode",
+   "to": "skillmd",
+   "kind": "io",
+   "label": "loads the skill"
+  },
+  {
+   "from": "ext.claude",
+   "to": "cli._run_say",
+   "kind": "io",
+   "label": "Bash: agent-voice say"
+  },
+  {
+   "from": "ext.copilot",
+   "to": "cli._run_say",
+   "kind": "io",
+   "label": "shell: agent-voice say"
+  },
+  {
+   "from": "ext.claude",
+   "to": "cli._hook",
+   "kind": "io",
+   "label": "hook event \u2192 stdin"
+  },
+  {
+   "from": "ext.copilot",
+   "to": "cli._hook",
+   "kind": "io",
+   "label": "hook event \u2192 stdin"
+  },
+  {
+   "from": "ext.install",
+   "to": "cli.main",
+   "kind": "io",
+   "label": "installs the command"
+  },
+  {
+   "from": "server.request",
+   "to": "server._Handler.handle",
+   "kind": "socket",
+   "label": "Unix socket \u00b7 JSON line"
+  },
+  {
+   "from": "server.start",
+   "to": "cli._serve",
+   "kind": "spawn",
+   "label": "spawns `agent-voice serve`"
+  },
+  {
+   "from": "hooks._speak_in_background",
+   "to": "cli._run_say",
+   "kind": "spawn",
+   "label": "fallback: spawns `say`"
+  },
+  {
+   "from": "server._Handler._answer",
+   "to": "server.Voice.submit",
+   "kind": "call",
+   "label": "queues the job"
+  },
+  {
+   "from": "server._Handler._answer",
+   "to": "server.Voice.cancel",
+   "kind": "call",
+   "label": "cancel"
+  },
+  {
+   "from": "server.serve",
+   "to": "server.Voice.run",
+   "kind": "call",
+   "label": "works the queue"
+  },
+  {
+   "from": "server.Voice._speak",
+   "to": "speech.synthesize",
+   "kind": "call",
+   "label": "warm model"
+  },
+  {
+   "from": "skill.skill_text",
+   "to": "skillmd",
+   "kind": "io",
+   "label": "reads"
+  },
+  {
+   "from": "skill.install",
+   "to": "skillmd",
+   "kind": "io",
+   "label": "copies"
+  },
+  {
+   "from": "init",
+   "to": "speech.say",
+   "kind": "call",
+   "label": "re-exports"
+  },
+  {
+   "from": "hooks._chime",
+   "to": "ext.audio",
+   "kind": "io",
+   "label": "afplay Glass/Ping"
+  },
+  {
+   "from": "speech.play",
+   "to": "ext.audio",
+   "kind": "io",
+   "label": "afplay WAV"
+  },
+  {
+   "from": "speech._say_fallback",
+   "to": "ext.audio",
+   "kind": "io",
+   "label": "say"
+  },
+  {
+   "from": "server.Voice._speak",
+   "to": "ext.audio",
+   "kind": "io",
+   "label": "afplay / say"
+  },
+  {
+   "from": "server.Voice.cancel",
+   "to": "ext.audio",
+   "kind": "io",
+   "label": "terminates afplay"
+  },
+  {
+   "from": "speech._playback_lock",
+   "to": "ext.state",
+   "kind": "io",
+   "label": "flock playback.lock"
+  },
+  {
+   "from": "speech.is_muted",
+   "to": "ext.state",
+   "kind": "io",
+   "label": "reads muted"
+  },
+  {
+   "from": "speech.set_muted",
+   "to": "ext.state",
+   "kind": "io",
+   "label": "writes muted"
+  },
+  {
+   "from": "server.serve",
+   "to": "ext.state",
+   "kind": "io",
+   "label": "server.lock \u00b7 voice.sock"
+  },
+  {
+   "from": "server.request",
+   "to": "ext.state",
+   "kind": "io",
+   "label": "connects voice.sock"
+  },
+  {
+   "from": "hooks._log",
+   "to": "ext.state",
+   "kind": "io",
+   "label": "appends hooks.log"
+  },
+  {
+   "from": "hooks.set_logging",
+   "to": "ext.state",
+   "kind": "io",
+   "label": "hook-log flag"
+  },
+  {
+   "from": "hooks._install_claude",
+   "to": "ext.config",
+   "kind": "io",
+   "label": "edits settings.json"
+  },
+  {
+   "from": "hooks._read_settings",
+   "to": "ext.config",
+   "kind": "io",
+   "label": "reads settings.json"
+  },
+  {
+   "from": "hooks.install",
+   "to": "ext.config",
+   "kind": "io",
+   "label": "writes Copilot hook file"
+  },
+  {
+   "from": "hooks.uninstall",
+   "to": "ext.config",
+   "kind": "io",
+   "label": "removes entries / file"
+  },
+  {
+   "from": "skill.install",
+   "to": "ext.config",
+   "kind": "io",
+   "label": "writes SKILL.md"
+  },
+  {
+   "from": "skill.uninstall",
+   "to": "ext.config",
+   "kind": "io",
+   "label": "removes skill folder"
+  },
+  {
+   "from": "speech.model_path",
+   "to": "ext.hf",
+   "kind": "io",
+   "label": "cache \u00b7 download"
+  },
+  {
+   "from": "speech._load_model",
+   "to": "ext.mlx",
+   "kind": "io",
+   "label": "load_model"
+  },
+  {
+   "from": "speech.synthesize",
+   "to": "ext.mlx",
+   "kind": "io",
+   "label": "model.generate"
+  },
+  {
+   "from": "ext.mlx",
+   "to": "ext.g2p",
+   "kind": "io",
+   "label": "phonemes"
+  },
+  {
+   "from": "speech.espeak_path_problem",
+   "to": "ext.g2p",
+   "kind": "io",
+   "label": "checks data path"
+  },
+  {
+   "from": "speech._write_wav",
+   "to": "ext.sf",
+   "kind": "io",
+   "label": "sf.write"
+  }
+ ],
+ "tours": [
+  {
+   "id": "voice",
+   "title": "How is a voice generated?",
+   "tags": [
+    "audio",
+    "performance"
+   ],
+   "steps": [
+    {
+     "focus": "ext.claude",
+     "level": 0,
+     "hl": [
+      "ext.claude",
+      "cli._run_say"
+     ],
+     "text": "An agent decides to speak and runs `agent-voice say \"\u2026\"` through its shell tool \u2014 the skill told it when and how."
+    },
+    {
+     "focus": "cli._run_say",
+     "level": 2,
+     "hl": [
+      "cli.main",
+      "cli._run_say",
+      "cli._read_text"
+     ],
+     "text": "cli.main routes to _run_say. It sets HF_HUB_OFFLINE so nothing reaches the network, reads the text (arguments or stdin) and checks mute."
+    },
+    {
+     "focus": "cli._say_via_server",
+     "level": 2,
+     "hl": [
+      "cli._say_via_server",
+      "server.speak",
+      "server.usable",
+      "server.start"
+     ],
+     "text": "_say_via_server hands the text to server.speak, which starts the voice server on first use (a detached `agent-voice serve`) and waits until it answers."
+    },
+    {
+     "focus": "server.request",
+     "level": 2,
+     "hl": [
+      "server.request",
+      "server._Handler.handle",
+      "server._Handler._answer",
+      "server.Voice.submit"
+     ],
+     "text": "The client sends one JSON line over ~/.agent-voice/voice.sock. In the server process, the handler turns it into a Job and queues it \u2014 one speaker at a time."
+    },
+    {
+     "focus": "server.Voice._speak",
+     "level": 2,
+     "hl": [
+      "server.Voice.run",
+      "server.Voice._next",
+      "server.Voice._speak",
+      "speech.synthesize"
+     ],
+     "text": "The worker (main thread, where MLX is happiest) takes the job and calls speech.synthesize with the model already warm."
+    },
+    {
+     "focus": "speech.synthesize",
+     "level": 2,
+     "hl": [
+      "speech.synthesize",
+      "speech.espeak_path_problem",
+      "speech.lang_code",
+      "speech._load_model",
+      "speech.model_path",
+      "ext.mlx",
+      "ext.g2p"
+     ],
+     "text": "synthesize guards espeak's 159-byte path limit, maps the voice to a language, loads Kokoro once (cache only \u2014 never downloads) and runs model.generate: misaki and spaCy turn text into phonemes, espeak fills in unknown words."
+    },
+    {
+     "focus": "speech._write_wav",
+     "level": 2,
+     "hl": [
+      "speech._write_wav",
+      "speech._playback_lock",
+      "ext.sf",
+      "ext.audio",
+      "server.Voice._speak"
+     ],
+     "text": "The samples become a temp WAV (soundfile), and afplay plays it under playback.lock so two agents never talk over each other. Warm, sound starts ~0.4 s after the request."
+    },
+    {
+     "focus": "server._Handler._answer",
+     "level": 1,
+     "hl": [
+      "server",
+      "cli",
+      "speech"
+     ],
+     "text": "The reply ({engine: kokoro}) goes back to the waiting `say`, which exits. If anything failed, macOS `say` spoke instead \u2014 see \u201cWhat if Kokoro fails?\u201d."
+    }
+   ]
+  },
+  {
+   "id": "approval",
+   "title": "What happens when an agent needs approval?",
+   "tags": [
+    "agent",
+    "audio"
+   ],
+   "steps": [
+    {
+     "focus": "ext.claude",
+     "level": 0,
+     "hl": [
+      "ext.claude",
+      "ext.copilot"
+     ],
+     "text": "An approval dialog (or a question) opens. Claude Code fires PermissionRequest; Copilot CLI fires a notification with permission_prompt or elicitation_dialog."
+    },
+    {
+     "focus": "cli._hook",
+     "level": 2,
+     "hl": [
+      "cli._hook",
+      "hooks.handle"
+     ],
+     "text": "The agent runs the installed command `agent-voice hook --from claude --event PermissionRequest` with the event as JSON on stdin. It never prints and always exits 0 \u2014 stdout would be read as a verdict on the tool call."
+    },
+    {
+     "focus": "hooks.handle",
+     "level": 2,
+     "hl": [
+      "hooks.handle",
+      "hooks._log",
+      "hooks.prompt_kind"
+     ],
+     "text": "handle logs the event name if hook-log is on (names only), then prompt_kind decides: approval, question, or nothing to do."
+    },
+    {
+     "focus": "hooks._chime",
+     "level": 2,
+     "hl": [
+      "hooks._chime",
+      "ext.audio",
+      "speech.is_muted"
+     ],
+     "text": "By default it chimes \u2014 Glass for an approval, Ping for a question \u2014 with a detached afplay, then returns in ~50 ms. You have to come to the keyboard anyway; a chime says enough."
+    }
+   ]
+  },
+  {
+   "id": "speak",
+   "title": "Spoken alerts and cancelling (--speak)",
+   "tags": [
+    "agent",
+    "process"
+   ],
+   "steps": [
+    {
+     "focus": "hooks.announcement",
+     "level": 2,
+     "hl": [
+      "hooks.announcement",
+      "hooks._tool_action",
+      "hooks._project",
+      "hooks.project_folder",
+      "hooks._worktree_main"
+     ],
+     "text": "With --speak, announcement builds the sentence: the tool kind from the agent's own tool name and the project's name (the main repo's, even from a worktree). Never the command \u2014 a partial read-out would make the rest sound safe."
+    },
+    {
+     "focus": "hooks._speak_in_background",
+     "level": 2,
+     "hl": [
+      "hooks._speak_in_background",
+      "hooks._session",
+      "hooks._tool_key",
+      "server.speak"
+     ],
+     "text": "It's queued on the voice server without waiting, tagged session:tool. No server? A detached `say` process speaks it instead."
+    },
+    {
+     "focus": "server.cancel",
+     "level": 2,
+     "hl": [
+      "hooks.handle",
+      "server.cancel",
+      "server._Handler._answer",
+      "server.Voice.cancel",
+      "server._matches"
+     ],
+     "text": "Neither agent reports that a prompt was answered, so the next event does: the tool finishing, you typing, or the turn ending. handle sends cancel(tag); the server drops it from the queue or terminates the playing afplay."
+    },
+    {
+     "focus": "hooks._events",
+     "level": 2,
+     "hl": [
+      "hooks._events",
+      "hooks._install_claude",
+      "hooks._copilot_file"
+     ],
+     "text": "That's why --speak installs extra hooks (PostToolUse, UserPromptSubmit, Stop \u2026) and the chime default doesn't: a chime is over in a second."
+    }
+   ]
+  },
+  {
+   "id": "settings",
+   "title": "How install-hooks edits settings.json safely",
+   "tags": [
+    "security",
+    "files"
+   ],
+   "steps": [
+    {
+     "focus": "hooks.install",
+     "level": 2,
+     "hl": [
+      "cli._install_hooks",
+      "hooks.install",
+      "hooks._paths"
+     ],
+     "text": "install checks each agent's folder. A missing ~/.claude or ~/.copilot is skipped, never created; if none exists it fails before writing anything."
+    },
+    {
+     "focus": "hooks._read_settings",
+     "level": 2,
+     "hl": [
+      "hooks._install_claude",
+      "hooks._read_settings",
+      "ext.config"
+     ],
+     "text": "settings.json is the one file agent-voice edits rather than owns. If it isn't valid JSON, the install stops and leaves it untouched."
+    },
+    {
+     "focus": "hooks._remove_claude_hooks",
+     "level": 2,
+     "hl": [
+      "hooks._remove_claude_hooks",
+      "hooks._our_claude_handlers",
+      "hooks._is_ours"
+     ],
+     "text": "Old agent-voice entries (from any version) are removed first \u2014 only ours, recognised by the command itself; your own hooks stay."
+    },
+    {
+     "focus": "hooks.hook_command",
+     "level": 2,
+     "hl": [
+      "hooks.hook_command",
+      "hooks.executable",
+      "hooks._quote"
+     ],
+     "text": "The new command uses agent-voice's absolute path (an agent launched from the Dock may not have ~/.local/bin on PATH), quoted if it contains spaces."
+    },
+    {
+     "focus": "hooks._write_json",
+     "level": 2,
+     "hl": [
+      "hooks._write_json",
+      "hooks._install_claude",
+      "ext.config"
+     ],
+     "text": "A backup is copied once (settings.json.agent-voice-backup), then the file is written atomically: temp file, then rename. Copilot gets its own file, so nothing of yours is edited there."
+    }
+   ]
+  },
+  {
+   "id": "network",
+   "title": "When does it touch the network?",
+   "tags": [
+    "network"
+   ],
+   "steps": [
+    {
+     "focus": "ext.install",
+     "level": 0,
+     "hl": [
+      "ext.install"
+     ],
+     "text": "Install time: uv fetches the package from GitHub and ~1 GB of dependencies, including the spaCy model by direct URL \u2014 the reason it isn't on PyPI."
+    },
+    {
+     "focus": "speech.model_path",
+     "level": 2,
+     "hl": [
+      "cli._prefetch",
+      "speech.prefetch",
+      "speech.model_path",
+      "ext.hf"
+     ],
+     "text": "`agent-voice prefetch` is the only runtime path that downloads: model_path(download=True) fetches Kokoro (~340 MB) from Hugging Face into its cache."
+    },
+    {
+     "focus": "cli._run_say",
+     "level": 2,
+     "hl": [
+      "cli._run_say",
+      "speech.model_path",
+      "speech._load_model"
+     ],
+     "text": "Speaking reads the cache only (local_files_only) and `say` sets HF_HUB_OFFLINE, so huggingface_hub and transformers refuse to try. Tested with the network blocked."
+    }
+   ]
+  },
+  {
+   "id": "fallback",
+   "title": "What if Kokoro fails?",
+   "tags": [
+    "resilience"
+   ],
+   "steps": [
+    {
+     "focus": "server.usable",
+     "level": 2,
+     "hl": [
+      "server.usable",
+      "server.enabled",
+      "server.start",
+      "cli._say_via_server"
+     ],
+     "text": "No voice server (AGENT_VOICE_SERVER=0, a socket path over 104 bytes, or it won't start)? `say` speaks in-process instead."
+    },
+    {
+     "focus": "speech.espeak_path_problem",
+     "level": 2,
+     "hl": [
+      "speech.espeak_path_problem",
+      "ext.g2p"
+     ],
+     "text": "Installed too deep for espeak-ng? That would kill the process silently, so it's refused up front with a VoiceError that names the fix."
+    },
+    {
+     "focus": "speech._say_fallback",
+     "level": 2,
+     "hl": [
+      "speech.say",
+      "speech._say_fallback",
+      "speech._warn_fallback",
+      "server.Voice._speak",
+      "ext.audio"
+     ],
+     "text": "Any Kokoro failure \u2014 missing model, bad voice, espeak \u2014 falls back to macOS `say`, and stderr says why. `--no-fallback` raises instead."
+    },
+    {
+     "focus": "hooks._speak_in_background",
+     "level": 2,
+     "hl": [
+      "hooks._speak_in_background"
+     ],
+     "text": "Hooks degrade the same way: no server \u2192 a detached process speaks. And every hook exits 0 whatever happens, so the agent is never affected."
+    }
+   ]
+  },
+  {
+   "id": "skill",
+   "title": "How does the agent learn to speak?",
+   "tags": [
+    "agent"
+   ],
+   "steps": [
+    {
+     "focus": "skill.install",
+     "level": 2,
+     "hl": [
+      "cli._install_skill",
+      "skill.targets",
+      "skill.install",
+      "skill.skill_text"
+     ],
+     "text": "install-skill copies the bundled SKILL.md into ~/.claude/skills and ~/.copilot/skills \u2014 only where the agent's folder exists, and never over a copy you've edited."
+    },
+    {
+     "focus": "skillmd",
+     "level": 1,
+     "hl": [
+      "skillmd",
+      "ext.claude",
+      "ext.copilot",
+      "ext.vscode"
+     ],
+     "text": "The agent loads SKILL.md when its description matches \u2014 or when you type /agent-voice conversational or /agent-voice announcer. The mode word is read from the invocation, so no agent-specific syntax is needed."
+    },
+    {
+     "focus": "skill.instruction_steps",
+     "level": 2,
+     "hl": [
+      "skill.instruction_steps"
+     ],
+     "text": "To make every session use it, install-skill prints an always-on line for CLAUDE.md and a Copilot instructions file \u2014 printed, never written: they're your files."
+    }
+   ]
+  },
+  {
+   "id": "lifecycle",
+   "title": "The voice server's life",
+   "tags": [
+    "process",
+    "performance"
+   ],
+   "steps": [
+    {
+     "focus": "server.start",
+     "level": 2,
+     "hl": [
+      "server.start",
+      "server.running",
+      "cli._serve"
+     ],
+     "text": "Born on the first `say`: start spawns a detached `agent-voice serve` and waits until it answers a ping."
+    },
+    {
+     "focus": "server.serve",
+     "level": 2,
+     "hl": [
+      "server.serve",
+      "ext.state"
+     ],
+     "text": "serve takes server.lock (a second server just exits), replaces a stale socket, binds voice.sock with mode 0600 and warms Kokoro before the first request."
+    },
+    {
+     "focus": "server.Voice._next",
+     "level": 2,
+     "hl": [
+      "server.Voice.run",
+      "server.Voice._next",
+      "server.idle_timeout"
+     ],
+     "text": "It speaks one job at a time for as long as requests come. After 30 idle minutes (AGENT_VOICE_IDLE) the loop ends, freeing ~780 MB."
+    },
+    {
+     "focus": "server.stop",
+     "level": 2,
+     "hl": [
+      "server.stop",
+      "cli._stop",
+      "cli._doctor"
+     ],
+     "text": "`agent-voice stop` ends it at once; `doctor` shows whether it runs. On exit it removes its socket \u2014 only the two lock files stay."
+    }
+   ]
+  }
+ ],
+ "stats": {
+  "functions": 109,
+  "tests": 87,
+  "edges": 176,
+  "coverage": 85
+ }
+}
