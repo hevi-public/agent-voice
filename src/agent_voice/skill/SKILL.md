@@ -10,10 +10,14 @@ The user works away from the screen, or talks to you by voice. Terminal text
 goes unnoticed; a spoken sentence does not. Speak with:
 
 ```bash
-agent-voice say "The login bug is fixed and the tests pass. Nothing needs your attention."
+agent-voice say "The login bug is fixed and the tests pass. Nothing needs your attention." >/dev/null 2>&1 &
 ```
 
-It blocks for the few seconds it takes to talk, then exits. Kokoro, a local
+Start it in the background, as above (`>/dev/null 2>&1 &`), and carry on: send
+your written reply, or keep working, while it talks. Run in the foreground,
+`agent-voice say` blocks until it has finished talking, so the text on screen
+and your next step both wait for the voice. Lines you start one after another
+still play in order, one at a time: the server queues them. Kokoro, a local
 neural voice, does the speaking; if it cannot, macOS `say` takes over by itself.
 
 ## Modes
@@ -81,13 +85,16 @@ These apply in both modes.
   shell leaves it alone:
 
   ```bash
-  agent-voice say <<'EOF'
+  agent-voice say >/dev/null 2>&1 <<'EOF' &
   The "retry" flag now defaults to off. Can you confirm that's what you want?
   EOF
   ```
 
 ## If it does not work
 
-If `agent-voice` is not found or exits with an error, carry on without it. Do
-not retry, install anything, or tell the user about it more than once. When the
-user has muted it (`agent-voice mute`), it returns silently; nothing to do.
+In the background you won't see an error, and that's fine: speaking is a
+courtesy, never a step the work depends on. If you notice that `agent-voice` is
+not found or fails (run it once in the foreground to check, if you suspect it),
+carry on without it. Do not retry, install anything, or tell the user about it
+more than once. When the user has muted it (`agent-voice mute`), it returns
+silently; nothing to do.

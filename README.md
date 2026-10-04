@@ -202,7 +202,7 @@ content. `agent-voice hook-log off` stops it and deletes the log.
 ## Commands
 
 ```text
-agent-voice say "text"                   say it; blocks until finished
+agent-voice say "text"                   say it; blocks until finished (agents: add >/dev/null 2>&1 &)
 agent-voice say < file.txt               text from stdin (safe with quotes, $ and !)
 agent-voice say --voice bm_george "..."  another voice (agent-voice voices lists them)
 agent-voice say --speed 1.2 "..."        faster
