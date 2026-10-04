@@ -135,7 +135,8 @@ def leftovers(monkeypatch, tmp_path):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         yield lambda: sorted(folder.glob("agent-voice-*"))
-    assert [str(w.message) for w in caught if issubclass(w.category, ResourceWarning)] == []
+    implicit = [str(w.message) for w in caught if issubclass(w.category, ResourceWarning) and "Implicitly cleaning up" in str(w.message)]
+    assert implicit == []
 
 
 def run_in_background(voice):

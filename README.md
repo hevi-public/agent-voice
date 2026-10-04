@@ -130,7 +130,7 @@ and later calls hand it their text. It speaks one request at a time, so two
 agents still take turns.
 
 - While a line plays, it synthesizes the next one that is already waiting, so
-  queued lines follow each other without a pause. It stays one line ahead and
+  queued lines don't wait for synthesis between them. It stays one line ahead and
   no more, so memory holds one extra line's audio. A cancelled announcement is
   dropped wherever it is: waiting, being synthesized, ready, or playing.
   `AGENT_VOICE_LOOKAHEAD=0` turns this off: each line is then finished before
