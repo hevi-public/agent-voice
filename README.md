@@ -129,8 +129,15 @@ sentence from an already-loaded Kokoro starts in about 0.4. So the first
 and later calls hand it their text. It speaks one request at a time, so two
 agents still take turns.
 
+- While a line plays, it synthesizes the next one that is already waiting, so
+  queued lines follow each other without a pause. It stays one line ahead and
+  no more, so memory holds one extra line's audio. A cancelled announcement is
+  dropped wherever it is: waiting, being synthesized, ready, or playing.
+  `AGENT_VOICE_LOOKAHEAD=0` turns this off: each line is then finished before
+  the next is synthesized.
 - It holds about 800 MB of memory while it runs, and quits by itself after 30
-  minutes without speaking (`AGENT_VOICE_IDLE`, in seconds, changes that).
+  minutes without speaking, that is with nothing queued, synthesizing or
+  playing (`AGENT_VOICE_IDLE`, in seconds, changes that).
 - `agent-voice stop` ends it now; `agent-voice doctor` shows whether it runs.
 - `AGENT_VOICE_SERVER=0` turns it off: every `say` then loads Kokoro itself,
   as before.
@@ -213,8 +220,9 @@ agent-voice install-hooks [--speak] | uninstall-hooks  chime (or speak) when an 
 Environment variables: `AGENT_VOICE_VOICE` (default `af_heart`),
 `AGENT_VOICE_SPEED` (default `1.0`), `AGENT_VOICE_MUTE=1` (mutes that shell
 only), `AGENT_VOICE_SERVER=0` (no voice server), `AGENT_VOICE_IDLE` (seconds
-before the server quits, default 1800), and `AGENT_VOICE_HOME` (where the
-state files live, default `~/.agent-voice`).
+before the server quits, default 1800), `AGENT_VOICE_LOOKAHEAD=0` (the server
+doesn't synthesize the next line while one plays), and `AGENT_VOICE_HOME`
+(where the state files live, default `~/.agent-voice`).
 
 When two agents speak at once, the second waits for the first to finish.
 

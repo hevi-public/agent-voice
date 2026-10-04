@@ -127,7 +127,7 @@ MODULES = [
      "Announcer (default) speaks when done, blocked or failed; conversational speaks every reply. The mode is a word after `/agent-voice`, read from the invocation itself — no placeholder syntax — so it works in both agents. Never speak secrets; paths only when asked.",
      ["agent", "privacy"]),
     ("server", "server.py", "server.py", "The voice server: a background process that keeps Kokoro warm, plus its client.",
-     "Unix socket (0600) in ~/.agent-voice, one JSON line each way. One speaker at a time; tagged requests can be cancelled; quits after 30 idle minutes and removes its socket.",
+     "Unix socket (0600) in ~/.agent-voice, one JSON line each way. One speaker at a time, with the next line synthesized while one plays; tagged requests can be cancelled at any stage; quits after 30 idle minutes and removes its socket.",
      ["performance", "process"]),
     ("speech", "speech.py", "speech.py", "Text-to-speech core: settings, model loading, synthesis, playback and fallbacks.",
      "Everything that touches Kokoro. Heavy imports are lazy, so the CLI and hooks start fast. Falls back to macOS `say` whenever Kokoro can't produce audio.",
@@ -250,19 +250,38 @@ fn("skill.uninstall", "Deletes agent-voice's skill folders only.", ["files"], [(
 fn("server.socket_path", "~/.agent-voice/voice.sock.", ["files"])
 fn("server.enabled", "False when AGENT_VOICE_SERVER=0.", ["resilience"], [], ["test_disabled_means_no_server"])
 fn("server.idle_timeout", "30 minutes, or AGENT_VOICE_IDLE.", ["performance"])
+fn("server.lookahead_enabled", "False when AGENT_VOICE_LOOKAHEAD=0: each line is then finished before the next is synthesized.", ["performance"], [],
+   ["test_look_ahead_is_on_unless_the_environment_says_off", "test_look_ahead_can_be_switched_off"])
 fn("server.Job", "One request: text, voice, speed, tag, and the outcome the waiting client reads.")
 fn("server._matches", "Tag match: exact, or a prefix followed by ':' (a session cancels all its tools).", [], [], ["test_cancel_drops_queued_announcements_by_tag_and_prefix"])
-fn("server.Voice", "The queue and its one worker.", ["performance"])
-fn("server.Voice.__init__", "Injectable synthesize/player, so tests run the queue without Kokoro or speakers.")
-fn("server.Voice.submit", "Queues a job and wakes the worker.")
-fn("server.Voice.cancel", "Drops queued jobs with the tag and terminates the one playing.", ["audio"], [("process", "terminates the running afplay")],
-   ["test_cancel_stops_what_is_playing"])
-fn("server.Voice.stop", "Asks the worker to finish.")
-fn("server.Voice.idle_for", "Seconds since the last activity, for ping and doctor.")
-fn("server.Voice._next", "Waits for the next job, or returns None once idle for the timeout.", ["performance"], [], ["test_goes_idle_and_returns"])
-fn("server.Voice.run", "The worker loop — runs on the main thread, where MLX is happiest.", ["performance"], [], ["test_speaks_in_order_and_reports_the_engine"])
-fn("server.Voice._speak", "Synthesises with the warm model, writes a temp WAV and plays it under the playback lock; falls back to `say`.", ["audio", "resilience", "process"],
-   [("audio", "afplay speech.wav, or say")], ["test_kokoro_failure_falls_back_to_say", "test_without_fallback_the_error_is_returned"])
+fn("server._Ready", "A synthesized job waiting for its turn to play: what to run, its engine, and the temp folder holding its WAV.", ["files"])
+fn("server._Ready.discard", "Removes the temp folder.", ["files"], [("file", "deletes the temp WAV")], ["test_temp_wavs_are_removed_after_playing"])
+fn("server.Voice", "The queue and the two threads that work it: one synthesizes, one plays, and the next line is synthesized while one plays — one ahead, no more.", ["performance"])
+fn("server.Voice.__init__", "Injectable synthesize/player, so tests run the queue without Kokoro or speakers; `lookahead` switches synthesizing ahead off.")
+fn("server.Voice.submit", "Queues a job and wakes the threads.")
+fn("server.Voice.cancel", "Drops jobs with the tag wherever they are: queued, being synthesized, synthesized ahead (its WAV removed), or playing (afplay terminated).", ["audio"],
+   [("process", "terminates the running afplay")],
+   ["test_cancel_stops_what_is_playing", "test_cancel_drops_a_line_still_in_the_queue", "test_cancel_drops_a_line_being_synthesized",
+    "test_cancel_drops_the_line_synthesized_ahead_with_its_wav", "test_cancel_by_session_reaches_every_stage_and_spares_other_sessions"])
+fn("server.Voice.stop", "Asks the threads to finish what is in hand, then end.", [], [], ["test_stop_lets_the_lines_in_hand_finish_and_run_returns"])
+fn("server.Voice._busy", "Is a job queued, being synthesized, waiting to play or playing? Idle time counts only when not.", ["performance"], [],
+   ["test_idle_time_runs_only_when_nothing_is_in_hand"])
+fn("server.Voice.idle_for", "Seconds since the last activity (0 while busy), for ping and doctor.")
+fn("server.Voice._next", "Waits until the next job may be synthesized — the place ahead of playback is free — or returns None once stopped, or idle for the timeout.", ["performance"], [],
+   ["test_goes_idle_and_returns", "test_idle_time_does_not_run_while_a_line_plays", "test_only_one_line_is_synthesized_ahead", "test_look_ahead_can_be_switched_off"])
+fn("server.Voice.run", "Runs the synthesis loop on the calling thread — the main one, where MLX is happiest — and starts the playback thread; returns once both are done.", ["performance"], [],
+   ["test_speaks_in_order_and_reports_the_engine", "test_synthesis_stays_on_one_thread_and_playback_on_another"])
+fn("server.Voice._synthesize", "Synthesizes one job and puts it in the place ahead of playback, or settles it here when it failed or was cancelled meanwhile.", ["performance"], [],
+   ["test_the_next_line_is_synthesized_while_this_one_plays", "test_lines_play_back_to_back_with_look_ahead"])
+fn("server.Voice._prepare", "Synthesizes with the warm model into a temp WAV; falls back to `say` when Kokoro fails. Plays nothing.", ["audio", "resilience", "files"],
+   [("file", "writes a temp speech.wav")],
+   ["test_kokoro_failure_falls_back_to_say", "test_without_fallback_the_error_is_returned", "test_a_failed_wav_write_leaves_nothing_behind"])
+fn("server.Voice._play_loop", "The playback thread: plays what synthesis hands over, one job at a time, in order.", ["audio", "process"], [],
+   ["test_lines_play_in_the_order_they_were_submitted"])
+fn("server.Voice._take_ready", "Waits for the job ahead and takes it, which frees the place for the next synthesis.", ["performance"])
+fn("server.Voice._play", "Plays one job under the playback lock: afplay speech.wav, or say.", ["audio", "process"],
+   [("audio", "afplay speech.wav, or say")], ["test_a_waiting_say_returns_after_its_own_playback", "test_the_say_fallback_is_pipelined_too"])
+fn("server.Voice._finish", "Ends a job — cancelled unless it failed or has an engine — and wakes the client waiting on it.")
 fn("server._Handler", "One connection: one JSON request, one JSON reply.", ["process"])
 fn("server._Handler.handle", "Reads the request line, answers, writes the reply.", ["process"], [("socket", "JSON line in / out")])
 fn("server._Handler._answer", "say (wait or not) · cancel · ping · stop.", ["process"], [], ["test_protocol_round_trip"])
@@ -334,9 +353,9 @@ EXTRA = [
     ("server._Handler._answer", "server.Voice.submit", "call", "queues the job"),
     ("server._Handler._answer", "server.Voice.cancel", "call", "cancel"),
     ("server.serve", "server.Voice.run", "call", "works the queue"),
-    ("server.Voice._speak", "speech.synthesize", "call", "warm model"),
-    ("server.Voice._speak", "speech._write_wav", "call", "temp WAV"),
-    ("server.Voice._speak", "speech._playback_lock", "call", "takes turns"),
+    ("server.Voice._prepare", "speech.synthesize", "call", "warm model"),
+    ("server.Voice._prepare", "speech._write_wav", "call", "temp WAV"),
+    ("server.Voice._play", "speech._playback_lock", "call", "takes turns"),
     ("skill.skill_text", "skillmd", "io", "reads"),
     ("skill.install", "skillmd", "io", "copies"),
     ("init", "speech.say", "call", "re-exports"),
@@ -344,7 +363,7 @@ EXTRA = [
     ("hooks._chime", "ext.audio", "io", "afplay Glass/Ping"),
     ("speech.play", "ext.audio", "io", "afplay WAV"),
     ("speech._say_fallback", "ext.audio", "io", "say"),
-    ("server.Voice._speak", "ext.audio", "io", "afplay / say"),
+    ("server.Voice._play", "ext.audio", "io", "afplay / say"),
     ("server.Voice.cancel", "ext.audio", "io", "terminates afplay"),
     ("speech._playback_lock", "ext.state", "io", "flock playback.lock"),
     ("speech.is_muted", "ext.state", "io", "reads muted"),
@@ -387,9 +406,9 @@ TOURS = [
         {"focus": "cli._run_say", "level": 2, "hl": ["cli.main", "cli._run_say", "cli._read_text"], "text": "cli.main routes to _run_say. It sets HF_HUB_OFFLINE so nothing reaches the network, reads the text (arguments or stdin) and checks mute."},
         {"focus": "cli._say_via_server", "level": 2, "hl": ["cli._say_via_server", "server.speak", "server.usable", "server.start"], "text": "_say_via_server hands the text to server.speak, which starts the voice server on first use (a detached `agent-voice serve`) and waits until it answers."},
         {"focus": "server.request", "level": 2, "hl": ["server.request", "server._Handler.handle", "server._Handler._answer", "server.Voice.submit"], "text": "The client sends one JSON line over ~/.agent-voice/voice.sock. In the server process, the handler turns it into a Job and queues it — one speaker at a time."},
-        {"focus": "server.Voice._speak", "level": 2, "hl": ["server.Voice.run", "server.Voice._next", "server.Voice._speak", "speech.synthesize"], "text": "The worker (main thread, where MLX is happiest) takes the job and calls speech.synthesize with the model already warm."},
+        {"focus": "server.Voice._prepare", "level": 2, "hl": ["server.Voice.run", "server.Voice._next", "server.Voice._synthesize", "server.Voice._prepare", "speech.synthesize"], "text": "The synthesis thread (the main one, where MLX is happiest) takes the job and calls speech.synthesize with the model already warm. If a line is still playing it already works on this one, one line ahead and no more."},
         {"focus": "speech.synthesize", "level": 2, "hl": ["speech.synthesize", "speech.espeak_path_problem", "speech.lang_code", "speech._load_model", "speech.model_path", "ext.mlx", "ext.g2p"], "text": "synthesize guards espeak's 159-byte path limit, maps the voice to a language, loads Kokoro once (cache only — never downloads) and runs model.generate: misaki and spaCy turn text into phonemes, espeak fills in unknown words."},
-        {"focus": "speech._write_wav", "level": 2, "hl": ["speech._write_wav", "speech._playback_lock", "ext.sf", "ext.audio", "server.Voice._speak"], "text": "The samples become a temp WAV (soundfile), and afplay plays it under playback.lock so two agents never talk over each other. Warm, sound starts ~0.4 s after the request."},
+        {"focus": "speech._write_wav", "level": 2, "hl": ["speech._write_wav", "speech._playback_lock", "ext.sf", "ext.audio", "server.Voice._prepare", "server.Voice._play"], "text": "The samples become a temp WAV (soundfile), and the playback thread plays it with afplay under playback.lock so two agents never talk over each other. Warm, sound starts ~0.4 s after the request, and a queued line follows the one before it without waiting for its synthesis."},
         {"focus": "server._Handler._answer", "level": 1, "hl": ["server", "cli", "speech"], "text": "The reply ({engine: kokoro}) goes back to the waiting `say`, which exits. If anything failed, macOS `say` spoke instead — see “What if Kokoro fails?”."},
     ]},
     {"id": "approval", "title": "What happens when an agent needs approval?", "tags": ["agent", "audio"], "steps": [
@@ -419,7 +438,7 @@ TOURS = [
     {"id": "fallback", "title": "What if Kokoro fails?", "tags": ["resilience"], "steps": [
         {"focus": "server.usable", "level": 2, "hl": ["server.usable", "server.enabled", "server.start", "cli._say_via_server"], "text": "No voice server (AGENT_VOICE_SERVER=0, a socket path over 104 bytes, or it won't start)? `say` speaks in-process instead."},
         {"focus": "speech.espeak_path_problem", "level": 2, "hl": ["speech.espeak_path_problem", "ext.g2p"], "text": "Installed too deep for espeak-ng? That would kill the process silently, so it's refused up front with a VoiceError that names the fix."},
-        {"focus": "speech._say_fallback", "level": 2, "hl": ["speech.say", "speech._say_fallback", "speech._warn_fallback", "server.Voice._speak", "ext.audio"], "text": "Any Kokoro failure — missing model, bad voice, espeak — falls back to macOS `say`, and stderr says why. `--no-fallback` raises instead."},
+        {"focus": "speech._say_fallback", "level": 2, "hl": ["speech.say", "speech._say_fallback", "speech._warn_fallback", "server.Voice._prepare", "ext.audio"], "text": "Any Kokoro failure — missing model, bad voice, espeak — falls back to macOS `say`, and stderr says why. `--no-fallback` raises instead."},
         {"focus": "hooks._speak_in_background", "level": 2, "hl": ["hooks._speak_in_background"], "text": "Hooks degrade the same way: no server → a detached process speaks. And every hook exits 0 whatever happens, so the agent is never affected."},
     ]},
     {"id": "skill", "title": "How does the agent learn to speak?", "tags": ["agent"], "steps": [
@@ -430,7 +449,7 @@ TOURS = [
     {"id": "lifecycle", "title": "The voice server's life", "tags": ["process", "performance"], "steps": [
         {"focus": "server.start", "level": 2, "hl": ["server.start", "server.running", "cli._serve"], "text": "Born on the first `say`: start spawns a detached `agent-voice serve` and waits until it answers a ping."},
         {"focus": "server.serve", "level": 2, "hl": ["server.serve", "ext.state"], "text": "serve takes server.lock (a second server just exits), replaces a stale socket, binds voice.sock with mode 0600 and warms Kokoro before the first request."},
-        {"focus": "server.Voice._next", "level": 2, "hl": ["server.Voice.run", "server.Voice._next", "server.idle_timeout"], "text": "It speaks one job at a time for as long as requests come. After 30 idle minutes (AGENT_VOICE_IDLE) the loop ends, freeing ~780 MB."},
+        {"focus": "server.Voice._next", "level": 2, "hl": ["server.Voice.run", "server.Voice._next", "server.idle_timeout"], "text": "It speaks one job at a time for as long as requests come, synthesizing the next while one plays. After 30 minutes with nothing queued, synthesizing or playing (AGENT_VOICE_IDLE) the loop ends, freeing ~780 MB."},
         {"focus": "server.stop", "level": 2, "hl": ["server.stop", "cli._stop", "cli._doctor"], "text": "`agent-voice stop` ends it at once; `doctor` shows whether it runs. On exit it removes its socket — only the two lock files stay."},
     ]},
 ]
