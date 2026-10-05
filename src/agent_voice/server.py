@@ -92,10 +92,10 @@ class Job:
     engine: str | None = None
     warning: str | None = None
     error: str | None = None
-    played: bool = False  # its sound has begun (set before `settled`, under the voice's lock)
+    started: threading.Event = field(default_factory=threading.Event)  # its sound has begun
     done: threading.Event = field(default_factory=threading.Event)
     # Set when the job has begun to play or is over, whichever comes first: what a
-    # client that wants to be told when the sound begins waits on, then looks at `played`.
+    # client that wants to be told when the sound begins waits on, then looks at `started`.
     settled: threading.Event = field(default_factory=threading.Event)
 
     def finish(self) -> None:
@@ -191,7 +191,7 @@ class Voice:
             if self.synthesizing is not None and _matches(self.synthesizing.tag, tag):
                 self.synthesizing.cancelled = True
                 count += 1
-            if self.current is not None and _matches(self.current.tag, tag) and (playing or not self.current.played):
+            if self.current is not None and _matches(self.current.tag, tag) and (playing or not self.current.started.is_set()):
                 self.current.cancelled = True
                 if self.playing is not None:
                     self.playing.terminate()
@@ -335,7 +335,7 @@ class Voice:
                     job.engine = "cancelled"
                     return
                 process = self.playing = self.player(ready.argv)
-                job.played = True
+                job.started.set()
             job.settled.set()  # the sound has begun: whoever asked to be told is told
             process.wait()
         job.engine = "cancelled" if job.cancelled else ready.engine
@@ -375,7 +375,7 @@ class _Handler(socketserver.StreamRequestHandler):
                 return {"ok": True, "queued": True}
             if request.get("progress"):
                 job.settled.wait()
-                if job.played:
+                if job.started.is_set():
                     self.wfile.write(b'{"playing": true}\n')  # unbuffered: the client has it at once
                     self.wfile.flush()
             job.done.wait()

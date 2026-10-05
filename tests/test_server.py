@@ -454,17 +454,17 @@ def test_cancel_that_spares_what_plays_drops_every_stage_before_it(voice, player
     player.finish(0)
     assert jobs[0].done.wait(2) and jobs[0].engine == "kokoro"
     for job in jobs[1:]:
-        assert job.done.wait(2) and job.engine == "cancelled" and not job.played
+        assert job.done.wait(2) and job.engine == "cancelled" and not job.started.is_set()
     assert player.texts == ["1"] and leftovers() == []
     voice.stop()
 
 
-def test_a_job_is_played_only_once_its_sound_has_begun(voice, player):
+def test_a_job_is_started_once_its_sound_has_begun(voice, player):
     player.auto = False
     job = server.Job("1")
     voice.submit(job)
     run_in_background(voice)
-    assert job.settled.wait(2) and job.played and not job.done.is_set()
+    assert job.settled.wait(2) and job.started.is_set() and not job.done.is_set()
     player.finish(0)
     assert job.done.wait(2)
     voice.stop()
