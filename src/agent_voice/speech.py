@@ -11,7 +11,7 @@ import sys
 import tempfile
 import threading
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -222,17 +222,22 @@ def _write_wav(audio: np.ndarray, sample_rate: int, path: str | os.PathLike) -> 
     sf.write(os.fspath(path), audio, sample_rate)
 
 
-def play(audio: np.ndarray, sample_rate: int) -> None:
+def play(audio: np.ndarray, sample_rate: int, on_start: Callable[[], None] | None = None) -> None:
+    """Plays `audio`; `on_start` is called as playback begins (once the playback lock is held)."""
     with tempfile.TemporaryDirectory(prefix="agent-voice-") as directory:
         wav = Path(directory) / "speech.wav"
         _write_wav(audio, sample_rate, wav)
         with _playback_lock():
+            if on_start is not None:
+                on_start()
             subprocess.run([AFPLAY, str(wav)], check=True)
 
 
-def _say_fallback(text: str, out: Path | None) -> None:
+def _say_fallback(text: str, out: Path | None, on_start: Callable[[], None] | None = None) -> None:
     if out is None:
         with _playback_lock():
+            if on_start is not None:
+                on_start()
             subprocess.run([SAY, text], check=True)
     else:
         # `say` picks the container from the extension; WAVE needs an explicit sample format.
@@ -260,8 +265,10 @@ def say(
     *,
     fallback: bool = True,
     verbose: bool = False,
+    on_start: Callable[[], None] | None = None,
 ) -> str:
-    """Speaks `text` aloud and blocks until it has finished.
+    """Speaks `text` aloud and blocks until it has finished. `on_start` is
+    called as the sound begins (not at all when muted).
 
     Returns the engine that spoke: "kokoro", "say" (Kokoro failed and
     `fallback` is on), or "muted". A caller that would rather fail than fall
@@ -276,9 +283,9 @@ def say(
         if not fallback:
             raise
         _warn_fallback(exc)
-        _say_fallback(text, None)
+        _say_fallback(text, None, on_start)
         return "say"
-    play(audio, rate)
+    play(audio, rate, on_start)
     return "kokoro"
 
 
