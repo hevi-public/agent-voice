@@ -132,7 +132,8 @@ agents still take turns.
 - While a line plays, it synthesizes the next one that is already waiting, so
   queued lines don't wait for synthesis between them. It stays one line ahead and
   no more, so memory holds one extra line's audio. A cancelled announcement is
-  dropped wherever it is: waiting, being synthesized, ready, or playing.
+  dropped wherever it is: waiting, being synthesized, ready, or playing (the
+  `agent-voice cancel` command spares a line that is already playing).
   `AGENT_VOICE_LOOKAHEAD=0` turns this off: each line is then finished before
   the next is synthesized.
 - It holds about 800 MB of memory while it runs, and quits by itself after 30
@@ -207,6 +208,9 @@ agent-voice say < file.txt               text from stdin (safe with quotes, $ an
 agent-voice say --voice bm_george "..."  another voice (agent-voice voices lists them)
 agent-voice say --speed 1.2 "..."        faster
 agent-voice say --out hi.wav "..."       write a WAV file instead of playing it
+agent-voice say --progress "..."         also print `playing` on stdout when the sound begins
+agent-voice say --tag TAG "..."          name the line, so cancel can withdraw it while it is queued
+agent-voice cancel TAG                   withdraw the queued lines with that tag (never starts a server)
 
 agent-voice mute | unmute                silence every agent, e.g. during a meeting
 agent-voice doctor                       check the install
@@ -225,6 +229,34 @@ doesn't synthesize the next line while one plays), and `AGENT_VOICE_HOME`
 (where the state files live, default `~/.agent-voice`).
 
 When two agents speak at once, the second waits for the first to finish.
+
+### For programs that hand lines ahead: `--progress`, `--tag`, `cancel`
+
+A program that speaks many lines (a game's narration, say) can start one
+`say` per line without waiting for the one before: the server queues them in the
+order they arrive and synthesizes the next while one plays. Two options let it
+follow along:
+
+- `say --progress` prints exactly `playing` and a newline on stdout (flushed)
+  the moment this line's sound begins, which can be well after the command
+  started: the line waits behind others and for its own synthesis. The command
+  still exits when playback ends. Muted, it prints nothing and exits 0. Nothing
+  else is ever printed on stdout; warnings go to stderr. (A server that was
+  started before this option existed never prints it: `agent-voice stop`, and
+  the next `say` starts a current one.)
+- `say --tag TAG` names the line. `agent-voice cancel TAG` withdraws every queued
+  line with that tag, or one that starts with it and a colon (`trellis:7` takes
+  `trellis:7:3`), if it has not begun to play: queued, being synthesized or
+  synthesized ahead. A line already playing finishes. `cancel` exits 0 whether
+  or not anything was withdrawn (`-v` says which on stderr), and never starts a
+  server.
+
+`say --help` lists both options, so a program can check for them.
+
+Exit codes of `say`: 0 spoken (or muted), 1 failed, 2 nothing to say or bad
+usage, 3 the line was withdrawn by `cancel` before it played (the waiting `say`
+exits at once, printing no `playing`). The tag and the exit code 3 need the voice
+server; without one `say` speaks in-process and there is nothing to cancel.
 
 ## As a library
 

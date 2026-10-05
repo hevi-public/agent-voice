@@ -16,6 +16,10 @@ from pathlib import Path
 
 from . import __version__, hooks, server, skill, speech
 
+# `say` exit codes: 0 spoken (or muted), 1 failed, 2 nothing to say or bad usage,
+# 3 withdrawn (`agent-voice cancel`) before its sound began.
+EXIT_CANCELLED = 3
+
 
 def _add_say_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("text", nargs="*", help="what to say; read from stdin when omitted")
@@ -24,6 +28,15 @@ def _add_say_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--out", type=Path, help="write a WAV file instead of playing")
     parser.add_argument("--no-fallback", action="store_true", help="fail instead of falling back to macOS say")
     parser.add_argument("-v", "--verbose", action="store_true", help="show mlx-audio's own output")
+    parser.add_argument(
+        "--progress", action="store_true",
+        help="print `playing` on stdout when the sound begins (nothing when muted); exit when it ends",
+    )
+    parser.add_argument(
+        "--tag", metavar="TAG",
+        help="name this line so `agent-voice cancel TAG` can withdraw it while it is queued; "
+        f"if it is withdrawn, say exits {EXIT_CANCELLED}",
+    )
 
 
 def _read_text(args: argparse.Namespace) -> str:
@@ -50,27 +63,40 @@ def _run_say(args: argparse.Namespace) -> int:
             print(f"wrote {args.out}")
         elif speech.is_muted():
             pass
-        elif not _say_via_server(text, args):
-            speech.say(text, **options)
+        else:
+            engine = _say_via_server(text, args)
+            if engine == "cancelled":
+                print("agent-voice say: withdrawn before it played", file=sys.stderr)
+                return EXIT_CANCELLED
+            if engine is None:
+                speech.say(text, **options, **({"on_start": _announce_playing} if args.progress else {}))
     except Exception as exc:
         print(f"agent-voice say: {exc}", file=sys.stderr)
         return 1
     return 0
 
 
-def _say_via_server(text: str, args: argparse.Namespace) -> bool:
-    """True if the voice server spoke (or refused with an error, raised);
-    False when there is no server, so the caller speaks in-process."""
+def _announce_playing() -> None:
+    print("playing", flush=True)
+
+
+def _say_via_server(text: str, args: argparse.Namespace) -> str | None:
+    """The engine that spoke through the voice server ("cancelled" if the line
+    was withdrawn first; a refusal is raised as an error); None when there is
+    no server, so the caller speaks in-process."""
     if args.verbose:
-        return False  # mlx-audio's output only shows in-process
-    reply = server.speak(text.strip(), args.voice, args.speed, fallback=not args.no_fallback)
+        return None  # mlx-audio's output only shows in-process
+    reply = server.speak(
+        text.strip(), args.voice, args.speed, fallback=not args.no_fallback,
+        tag=args.tag, on_playing=_announce_playing if args.progress else None,
+    )
     if reply is None:
-        return False
+        return None
     if not reply.get("ok"):
         raise RuntimeError(reply.get("error") or "the voice server failed")
     if reply.get("warning"):
         print(f"agent-voice: {reply['warning']}", file=sys.stderr)
-    return True
+    return reply.get("engine") or "unknown"
 
 
 # MARK: - agent-voice subcommands
@@ -160,6 +186,16 @@ def _serve(args: argparse.Namespace) -> int:
     return server.serve()
 
 
+def _cancel(args: argparse.Namespace) -> int:
+    # Always 0: a line that is already over, or never was, is not a failure. Only
+    # what has not begun to play is withdrawn; a line already playing finishes.
+    count = server.cancel(args.tag, playing=False)
+    if args.verbose:
+        what = f"withdrew {count} queued line{'s' if count != 1 else ''}" if count else "nothing queued"
+        print(f"agent-voice cancel: {what} with the tag {args.tag}", file=sys.stderr)
+    return 0
+
+
 def _stop(args: argparse.Namespace) -> int:
     print("voice server stopped" if server.stop() else "voice server was not running")
     return 0
@@ -231,6 +267,13 @@ def main(argv: list[str] | None = None) -> int:
     say = commands.add_parser("say", help="say something aloud; blocks until finished")
     _add_say_arguments(say)
     say.set_defaults(run=_run_say)
+
+    cancel = commands.add_parser(
+        "cancel", help="withdraw the queued lines said with --tag TAG (one already playing finishes); never starts a server",
+    )
+    cancel.add_argument("tag", metavar="TAG", help="the tag; also matches tags that start with TAG and a colon")
+    cancel.add_argument("-v", "--verbose", action="store_true", help="say on stderr what was withdrawn")
+    cancel.set_defaults(run=_cancel)
 
     prefetch = commands.add_parser("prefetch", help="download the voice model and check it works")
     prefetch.add_argument("-v", "--verbose", action="store_true")

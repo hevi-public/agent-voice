@@ -436,6 +436,40 @@ def test_cancel_stops_the_playing_line_and_the_one_ahead_plays_at_once(voice, pl
     voice.stop()
 
 
+def test_cancel_that_spares_what_plays_drops_every_stage_before_it(voice, player, synth, leftovers):
+    player.auto = False
+    gate = synth.hold("2")
+    jobs = [server.Job(str(n), tag=f"t:{n}") for n in (1, 2, 3, 4)]
+    for job in jobs:
+        voice.submit(job)
+    run_in_background(voice)
+    assert wait_until(lambda: player.texts == ["1"] and synth.started == ["1", "2"])  # 1 plays, 2 is mid-rendering, 3 and 4 wait
+    assert voice.cancel("t:1", playing=False) == 0  # it has begun: it finishes
+    assert voice.cancel("t:2", playing=False) == 1  # being synthesized
+    assert voice.cancel("t:4", playing=False) == 1  # queued
+    gate.set()
+    in_flight(voice, player, playing="1", ahead="3")
+    assert voice.cancel("t:3", playing=False) == 1  # synthesized ahead
+    assert not player.processes[0].terminated and not jobs[0].done.is_set()
+    player.finish(0)
+    assert jobs[0].done.wait(2) and jobs[0].engine == "kokoro"
+    for job in jobs[1:]:
+        assert job.done.wait(2) and job.engine == "cancelled" and not job.played
+    assert player.texts == ["1"] and leftovers() == []
+    voice.stop()
+
+
+def test_a_job_is_played_only_once_its_sound_has_begun(voice, player):
+    player.auto = False
+    job = server.Job("1")
+    voice.submit(job)
+    run_in_background(voice)
+    assert job.settled.wait(2) and job.played and not job.done.is_set()
+    player.finish(0)
+    assert job.done.wait(2)
+    voice.stop()
+
+
 def test_cancel_by_session_reaches_every_stage_and_spares_other_sessions(voice, player, synth, leftovers):
     player.auto = False
     mine = [server.Job(str(n), tag=f"s1:{n}") for n in (1, 2, 3)]  # playing, synthesized ahead, queued
@@ -643,3 +677,166 @@ def test_a_state_folder_too_deep_for_a_socket_means_no_server(monkeypatch, tmp_p
     monkeypatch.setenv("AGENT_VOICE_HOME", str(tmp_path / ("d" * 120)))
     assert not server.usable()
     assert server.speak("hello") is None
+
+
+# MARK: - progress, tags and a cancel that spares what plays (through the socket)
+
+
+class Events:
+    """What a waiting `say` was told, in order, by `server.speak(..., on_playing=...)`."""
+
+    def __init__(self):
+        self.log = []
+
+    def playing(self):
+        self.log.append("playing")
+
+    def speak(self, text, **kwargs):
+        reply = server.speak(text, on_playing=self.playing, **kwargs)
+        self.log.append("reply")
+        return reply
+
+
+def speak_in_background(events, text, replies, **kwargs):
+    caller = threading.Thread(target=lambda: replies.append(events.speak(text, **kwargs)), daemon=True)
+    caller.start()
+    return caller
+
+
+def test_progress_is_told_before_the_final_reply_and_while_the_sound_plays(running, player):
+    player.auto = False
+    events, replies = Events(), []
+    caller = speak_in_background(events, "1", replies, tag="t:1")
+    assert wait_until(lambda: events.log == ["playing"])
+    assert replies == [] and not player.processes[0].finished.is_set()  # told while the sound is still going
+    player.finish(0)
+    caller.join(2)
+    assert events.log == ["playing", "reply"]
+    assert replies == [{"ok": True, "engine": "kokoro", "warning": None}]
+
+
+def test_progress_is_told_for_a_line_that_is_over_at_once(running, player):
+    events, replies = Events(), []
+    speak_in_background(events, "1", replies).join(2)  # the fake player ends a playback instantly
+    assert events.log == ["playing", "reply"]
+
+
+def test_progress_is_told_when_the_line_behind_another_begins(running, voice, player):
+    player.auto = False
+    first, second, replies = Events(), Events(), []
+    one = speak_in_background(first, "1", replies, tag="t:1")
+    assert wait_until(lambda: first.log == ["playing"])
+    two = speak_in_background(second, "2", replies, tag="t:2")
+    assert wait_until(waits_ahead(voice, "2"))
+    assert second.log == []  # queued behind: not playing yet
+    player.finish(0)
+    assert wait_until(lambda: second.log == ["playing"])
+    player.finish(1)
+    one.join(2), two.join(2)
+    assert second.log == ["playing", "reply"] and first.log == ["playing", "reply"]
+
+
+def test_a_say_that_did_not_ask_for_progress_gets_one_line_back(running, player):
+    reply = server.request({"op": "say", "text": "1", "tag": "t:1"}, timeout=2.0)
+    assert reply == {"ok": True, "engine": "kokoro", "warning": None}
+    assert server.speak("2", tag="t:2") == {"ok": True, "engine": "kokoro", "warning": None}
+
+
+def waits_ahead(voice, text):
+    return lambda: voice.ready is not None and voice.ready.job.text == text
+
+
+def test_a_queued_line_withdrawn_is_answered_cancelled_and_never_told_playing(running, voice, player):
+    player.auto = False
+    first, second, replies = Events(), Events(), []
+    one = speak_in_background(first, "1", replies, tag="t:1")
+    assert wait_until(lambda: first.log == ["playing"])
+    two = speak_in_background(second, "2", replies, tag="t:2")
+    assert wait_until(waits_ahead(voice, "2"))
+    assert server.cancel("t:2", playing=False) == 1
+    two.join(2)
+    assert not two.is_alive() and second.log == ["reply"]  # promptly, with no `playing`
+    assert {"ok": True, "engine": "cancelled", "warning": None} in replies
+    assert not player.processes[0].terminated  # line 1 is untouched
+    player.finish(0)
+    one.join(2)
+    assert first.log == ["playing", "reply"] and player.texts == ["1"]
+
+
+def test_a_playing_line_is_not_withdrawn_and_finishes(running, player):
+    player.auto = False
+    events, replies = Events(), []
+    caller = speak_in_background(events, "1", replies, tag="t:1")
+    assert wait_until(lambda: events.log == ["playing"])
+    assert server.cancel("t:1", playing=False) == 0
+    caller.join(0.2)
+    assert caller.is_alive() and not player.processes[0].terminated
+    player.finish(0)
+    caller.join(2)
+    assert replies == [{"ok": True, "engine": "kokoro", "warning": None}]
+
+
+def test_an_unknown_tag_withdraws_nothing(running, player):
+    assert server.cancel("nobody", playing=False) == 0
+    assert server.cancel("nobody") == 0
+
+
+def test_the_default_cancel_still_stops_what_plays(running, player):
+    player.auto = False
+    events, replies = Events(), []
+    caller = speak_in_background(events, "1", replies, tag="t:1")
+    assert wait_until(lambda: events.log == ["playing"])
+    assert server.cancel("t:1") == 1
+    caller.join(2)
+    assert player.processes[0].terminated and replies[0]["engine"] == "cancelled"
+
+
+def test_a_failed_line_is_not_told_playing(running, player):
+    events, replies = Events(), []
+    speak_in_background(events, "broken", replies, fallback=False).join(2)
+    assert events.log == ["reply"] and replies[0]["ok"] is False
+
+
+def test_the_cli_prints_playing_once_while_the_sound_plays_and_exits_after(running, player, capsys):
+    from agent_voice import cli
+
+    player.auto = False
+    code = []
+    caller = threading.Thread(target=lambda: code.append(cli.main(["say", "--progress", "--tag", "t:cli", "1"])), daemon=True)
+    caller.start()
+    assert wait_until(lambda: player.texts == ["1"])
+    out = ""
+
+    def printed():
+        nonlocal out
+        out += capsys.readouterr().out
+        return out
+
+    assert wait_until(lambda: printed() == "playing\n")
+    assert code == []  # still speaking: it exits when the playback ends
+    player.finish(0)
+    caller.join(2)
+    assert code == [0]
+
+
+def test_the_cli_withdraws_a_queued_line_and_the_waiting_say_exits_3(running, voice, player, capsys):
+    from agent_voice import cli
+
+    player.auto = False
+    first, replies, code = Events(), [], []
+    one = speak_in_background(first, "1", replies, tag="t:1")
+    assert wait_until(lambda: first.log == ["playing"])
+    caller = threading.Thread(target=lambda: code.append(cli.main(["say", "--progress", "--tag", "t:2", "2"])), daemon=True)
+    caller.start()
+    assert wait_until(waits_ahead(voice, "2"))
+    capsys.readouterr()
+    assert cli.main(["cancel", "-v", "t:2"]) == 0
+    caller.join(2)
+    assert code == [cli.EXIT_CANCELLED] == [3]
+    captured = capsys.readouterr()
+    assert captured.out == ""  # never played: no `playing`
+    assert "withdrew 1 queued line" in captured.err
+    assert cli.main(["cancel", "-v", "t:2"]) == 0  # nothing left: still 0
+    assert "nothing queued" in capsys.readouterr().err
+    player.finish(0)
+    one.join(2)

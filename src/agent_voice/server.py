@@ -13,13 +13,20 @@ or playing, removing its socket, so the ~800 MB it holds is not held for good.
 Requests carry an optional tag, and `cancel` drops every request with that
 tag (or a tag starting with it and a colon) wherever it is: queued, being
 synthesized, synthesized ahead or playing. That is how an approval
-announcement is stopped once the agent has moved on.
+announcement is stopped once the agent has moved on. With `playing: false` it
+spares what has begun to play, which then finishes: that is what a caller
+withdrawing a line it handed ahead wants.
+
+A `say` that asks for `progress` is told when its sound begins: one extra line,
+{"playing": true}, before the final reply. A job that never plays (cancelled
+or failed first) gets no such line.
 
 Protocol: one JSON object per line each way, one request per connection.
-  {"op": "say", "text": ..., "voice": ..., "speed": ..., "tag": ..., "wait": true, "fallback": true}
+  {"op": "say", "text": ..., "voice": ..., "speed": ..., "tag": ..., "wait": true, "fallback": true, "progress": false}
+      -> {"playing": true}                                                     (only with progress, once the sound begins)
       -> {"ok": true, "engine": "kokoro" | "say" | "cancelled", "warning": ...}   (after playback)
       -> {"ok": true, "queued": true}                                          (wait: false)
-  {"op": "cancel", "tag": ...}  -> {"ok": true, "cancelled": n}
+  {"op": "cancel", "tag": ..., "playing": true}  -> {"ok": true, "cancelled": n}
   {"op": "ping"}                -> {"ok": true, "pid": ..., "idle": seconds}
   {"op": "stop"}                -> {"ok": true}
 """
@@ -85,7 +92,15 @@ class Job:
     engine: str | None = None
     warning: str | None = None
     error: str | None = None
+    played: bool = False  # its sound has begun (set before `settled`, under the voice's lock)
     done: threading.Event = field(default_factory=threading.Event)
+    # Set when the job has begun to play or is over, whichever comes first: what a
+    # client that wants to be told when the sound begins waits on, then looks at `played`.
+    settled: threading.Event = field(default_factory=threading.Event)
+
+    def finish(self) -> None:
+        self.done.set()
+        self.settled.set()
 
 
 def _matches(job_tag: str | None, tag: str) -> bool:
@@ -155,9 +170,12 @@ class Voice:
             self.last_activity = time.monotonic()
             self.cond.notify_all()
 
-    def cancel(self, tag: str) -> int:
+    def cancel(self, tag: str, playing: bool = True) -> int:
         """Drops every job with `tag`, wherever it is. A job being synthesized is
-        dropped when its synthesis returns; the one playing is stopped."""
+        dropped when its synthesis returns; the one playing is stopped, unless
+        `playing` is off: then a job whose sound has begun is left to finish, and
+        only those that have not begun (queued, synthesizing, synthesized ahead,
+        or taken for playback but not yet started) are dropped."""
         with self.cond:
             dropped = [job for job in self.queue if _matches(job.tag, tag)]
             for job in dropped:
@@ -173,7 +191,7 @@ class Voice:
             if self.synthesizing is not None and _matches(self.synthesizing.tag, tag):
                 self.synthesizing.cancelled = True
                 count += 1
-            if self.current is not None and _matches(self.current.tag, tag):
+            if self.current is not None and _matches(self.current.tag, tag) and (playing or not self.current.played):
                 self.current.cancelled = True
                 if self.playing is not None:
                     self.playing.terminate()
@@ -182,7 +200,7 @@ class Voice:
         if ahead is not None:
             ahead.discard()
         for job in dropped:
-            job.done.set()
+            job.finish()
         return count
 
     def stop(self) -> None:
@@ -317,6 +335,8 @@ class Voice:
                     job.engine = "cancelled"
                     return
                 process = self.playing = self.player(ready.argv)
+                job.played = True
+            job.settled.set()  # the sound has begun: whoever asked to be told is told
             process.wait()
         job.engine = "cancelled" if job.cancelled else ready.engine
 
@@ -326,7 +346,7 @@ class Voice:
         the client waiting on it."""
         if job.engine is None and job.error is None:
             job.engine = "cancelled"
-        job.done.set()
+        job.finish()
 
 
 class _Handler(socketserver.StreamRequestHandler):
@@ -340,8 +360,7 @@ class _Handler(socketserver.StreamRequestHandler):
         with contextlib.suppress(OSError):
             self.wfile.write((json.dumps(reply) + "\n").encode())
 
-    @staticmethod
-    def _answer(voice: Voice, request: dict) -> dict:
+    def _answer(self, voice: Voice, request: dict) -> dict:
         op = request.get("op")
         if op == "say":
             job = Job(
@@ -354,12 +373,17 @@ class _Handler(socketserver.StreamRequestHandler):
             voice.submit(job)
             if not request.get("wait", True):
                 return {"ok": True, "queued": True}
+            if request.get("progress"):
+                job.settled.wait()
+                if job.played:
+                    self.wfile.write(b'{"playing": true}\n')  # unbuffered: the client has it at once
+                    self.wfile.flush()
             job.done.wait()
             if job.error:
                 return {"ok": False, "error": job.error}
             return {"ok": True, "engine": job.engine, "warning": job.warning}
         if op == "cancel":
-            return {"ok": True, "cancelled": voice.cancel(str(request["tag"]))}
+            return {"ok": True, "cancelled": voice.cancel(str(request["tag"]), playing=bool(request.get("playing", True)))}
         if op == "ping":
             return {"ok": True, "pid": os.getpid(), "idle": round(voice.idle_for())}
         if op == "stop":
@@ -407,8 +431,10 @@ def serve(idle: float | None = None, voice: Voice | None = None) -> int:
 # MARK: - client
 
 
-def request(message: dict, timeout: float = 2.0) -> dict | None:
-    """Sends one request; None when no server answers."""
+def request(message: dict, timeout: float = 2.0, on_playing: Callable[[], None] | None = None) -> dict | None:
+    """Sends one request; None when no server answers. A line of the server's
+    that is `{"playing": true}` (sent only to a `say` that asked for `progress`)
+    calls `on_playing` and is not the answer: the answer is the next line."""
     path = socket_path()
     if not path.exists():
         return None
@@ -418,12 +444,21 @@ def request(message: dict, timeout: float = 2.0) -> dict | None:
             connection.connect(str(path))
             connection.sendall((json.dumps(message) + "\n").encode())
             data = b""
-            while not data.endswith(b"\n"):
-                chunk = connection.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-        return json.loads(data) if data else None
+            while True:
+                while b"\n" not in data:
+                    chunk = connection.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                line, _, data = data.partition(b"\n")
+                if not line.strip():
+                    return None
+                reply = json.loads(line)
+                if "ok" not in reply and reply.get("playing"):
+                    if on_playing is not None:
+                        on_playing()
+                    continue
+                return reply
     except (OSError, ValueError):
         return None
 
@@ -467,19 +502,27 @@ def speak(
     tag: str | None = None,
     wait: bool = True,
     fallback: bool = True,
+    on_playing: Callable[[], None] | None = None,
 ) -> dict | None:
     """Has the server speak `text`, starting it if needed. None when there is
     no server to be had (disabled, or it would not start): the caller then
-    speaks in-process."""
+    speaks in-process. `on_playing` is called when the sound begins (a server
+    that is older than this option never calls it)."""
     if not usable() or not start():
         return None
     message = {"op": "say", "text": text, "voice": voice, "speed": speed, "tag": tag, "wait": wait, "fallback": fallback}
-    return request(message, timeout=SAY_TIMEOUT if wait else 5.0)
+    if on_playing is not None and wait:
+        message["progress"] = True
+    return request(message, timeout=SAY_TIMEOUT if wait else 5.0, on_playing=on_playing)
 
 
-def cancel(tag: str) -> int:
-    """Stops `tag`'s announcements if a server is running; never starts one."""
-    reply = request({"op": "cancel", "tag": tag}, timeout=2.0)
+def cancel(tag: str, *, playing: bool = True) -> int:
+    """Stops `tag`'s announcements if a server is running; never starts one.
+    With `playing` off, a line that has begun to play is left to finish."""
+    message: dict = {"op": "cancel", "tag": tag}
+    if not playing:
+        message["playing"] = False
+    reply = request(message, timeout=2.0)
     return int(reply.get("cancelled", 0)) if reply else 0
 
 
